@@ -1,0 +1,99 @@
+module bstream;
+
+_ :: #import util;
+
+Stream :: struct {
+	start: *u8,
+	at: *u8,
+	end: *u8,
+}
+
+make_stream :: fn(d: []u8) -> Stream {
+	d := d;
+	return Stream {
+		start = d.data,
+		at = d.data,
+		end = d.data + len(d),
+	};
+}
+
+is_stream_over :: fn(s: *Stream) -> bool {
+	return s.at >= s.end;
+}
+
+remaining_bytes :: fn(s: *Stream) -> int {
+	return s.end - s.at;
+}
+
+advance :: fn(d: *Stream, n: u32) {
+	d.at += n;
+	if d.at > d.end
+		d.at = d.end;
+}
+
+can_read_n :: fn(d: *Stream, n: u32) -> bool {
+	if cast(u32, d.end - d.at) < n
+		return false;
+	return true;
+}
+
+read_u8 :: fn(s: *Stream) -> u8 {
+	if !can_read_n(s, 1)
+		return 0;
+	r := *cast(*u8, s.at);
+	advance(s, 1);
+	return r;
+}
+
+read_u32 :: fn(s: *Stream) -> u32 {
+	if !can_read_n(s, 4)
+		return 0;
+	r := *cast(*u32, s.at);
+	advance(s, 4);
+	return r;
+}
+
+read_string_len :: fn(s: *Stream, length: u32) -> string {
+	if !can_read_n(s, length)
+		return "";
+	if length == 0
+		return "";
+
+	buf := cast(*u8, malloc(length))[:length];
+	memcpy(&buf[0], s.at, length as int);
+	advance(s, length);
+	return cast(string, buf);
+}
+
+read_string :: fn(s: *Stream) -> string {
+	s := s;
+	length := read_u32(s);
+	return read_string_len(s, length);
+}
+
+write_u8 :: fn(s: *Stream, b: u8) {
+	if !can_read_n(s, 1)
+		return;
+	*s.at = b;
+	advance(s, 1);
+}
+
+write_u32 :: fn(s: *Stream, n: u32) {
+	if !can_read_n(s, 4)
+		return;
+	memcpy(s.at, &n, 4);
+	advance(s, 4);
+}
+
+write_string :: fn(s: *Stream, str: string) {
+	write_u32(s, len(str) as u32);
+	buf := cast([]u8, str);
+	for byte in buf {
+		write_u8(s, byte);
+	}
+}
+
+stream_to_slice :: fn(s: *Stream) -> []u8 {
+	return s.start[:s.at-s.start];
+}
+

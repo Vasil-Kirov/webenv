@@ -1,0 +1,45 @@
+module app;
+
+entry :: #import main;
+_ :: #import util;
+#import ui;
+_ :: #import renderer;
+
+App :: struct {
+	rend: *Renderer,
+	font: *Font,
+	w: u32,
+	h: u32,
+}
+
+get_loadable_files_count :: fn() -> int #foreign #tag="wexport" {
+	return 0;
+}
+
+get_loadable_file :: fn(idx: int, isFetchPath: int) -> ?*u8 #foreign #tag="wexport" {
+	return null;
+}
+
+start :: fn(info: entry.EntryInfo) -> ?*App {
+	app := malloc(cast(u32, size_of App)) as *App;
+	app.rend = info.rend;
+	app.font = info.font;
+	app.w = info.width;
+	app.h = info.height;
+
+	window := ui.panel_col();
+
+
+	ui.set_top_widget(window);
+	ui.config_window_size(app.font, app.w as int, app.h as int);
+	return app;
+}
+
+on_resize :: fn(app: *App, w: u32, h: u32) {
+	app.w = w;
+	app.h = h;
+}
+
+update :: fn(app: *App, dt: f32) {
+}
+

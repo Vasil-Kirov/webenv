@@ -1,0 +1,173 @@
+module renderer;
+
+_ :: #import math;
+_ :: #import util;
+#import ui;
+
+LINES_PIXEL_GAP :: 3;
+
+RasterizeMetrics :: struct {
+	w: f32,
+	h: f32,
+	bearingX: f32,
+	bearingY: f32,
+	advance: f32,
+}
+
+Glyph :: struct {
+	cp: u32,
+	texture: u32,
+	metrics: RasterizeMetrics,
+	not_picked_counter: uint,
+}
+
+MAX_LOADED_GLYPHS :: 1024;
+Font :: struct {
+	name: *u8,
+	loaded_glyphs: [MAX_LOADED_GLYPHS]Glyph,
+	height: int,
+	spacing: f32,
+	used_glyphs: int,
+}
+
+load_font_ :: fn(name: *u8) #wasm_import="imports","load_font";
+rasterize_glyph_ :: fn(cp: u32, font_name: *u8, out: *f32) -> u32 #wasm_import="imports","rasterize_glyph";
+
+round_px :: fn(x: f32) -> f32 {
+	if x < 0 {
+		return (0.0 - (((0.0 - x) + 0.5) as int) as f32);
+	}
+	return ((x + 0.5) as int) as f32;
+}
+
+rasterize_glyph :: fn(cp: u32, font_name: *u8) -> (GPUTexture, RasterizeMetrics) {
+	out: [5]f32;
+	texture := rasterize_glyph_(cp, font_name, &out[0]);
+	m := RasterizeMetrics {
+		round_px(out[0]),
+		round_px(out[1]),
+		round_px(out[2]),
+		round_px(out[3]),
+		out[4]
+	};
+	return texture, m;
+}
+
+find_glyph_to_eject :: fn(font: *Font) -> *Glyph {
+	loaded := font.loaded_glyphs[:font.used_glyphs];
+	biggest_i := 0;
+	biggest := 0 as uint;
+	for i, &glyph in loaded {
+		if glyph.not_picked_counter > biggest {
+			biggest_i = i;
+			biggest = glyph.not_picked_counter;
+		}
+	}
+
+	return &loaded[biggest_i];
+}
+
+get_glyph :: fn(font: *Font, cp: u32) -> Glyph {
+	loaded := font.loaded_glyphs[:font.used_glyphs];
+	for &glyph in loaded {
+		glyph.not_picked_counter++;
+	}
+	for &glyph in loaded {
+		if glyph.cp == cp {
+			glyph.not_picked_counter = 0;
+			return *glyph;
+		}
+	}
+
+	tex, metrics := rasterize_glyph(cp, font.name);
+	g: Glyph = .{
+		cp = cp,
+		texture = tex, metrics = metrics,
+		not_picked_counter = 0,
+	};
+
+	if font.used_glyphs < MAX_LOADED_GLYPHS {
+		font.loaded_glyphs[font.used_glyphs++] = g;
+	} else {
+		found := find_glyph_to_eject(font);
+		glDeleteTexture(found.texture);
+		*found = g;
+	}
+
+	return g;
+}
+
+load_font :: fn(name: *u8, height: int, spacing := 1.0) -> *Font {
+	font := malloc(cast(uint, size_of Font)) as *Font;
+
+	font.name = name;
+	font.height = height;
+	font.spacing = spacing;
+	load_font_(name);
+
+	return font;
+}
+
+measure_text :: fn(font: *Font, text: string) -> ui.iv2 {
+	sz: v2 = .{};
+	lines := 1;
+	linex := 0.0;
+	liney := 0.0;
+	for c in text {
+		if c == '\n' {
+			sz[0] = max(sz[0], linex);
+			sz[1] += cast(f32, font.height + LINES_PIXEL_GAP);
+			linex = 0;
+			liney = 0;
+			lines++;
+		}
+		g := get_glyph(font, c);
+		linex += g.metrics.advance + font.spacing;
+		continue;
+	}
+	sz[0] = max(sz[0], linex);
+	sz[1] += cast(f32, font.height);
+
+	szi := ui.iv2 {sz[0] as int, sz[1] as int };
+	return szi;
+}
+
+draw_text :: fn(r: *Renderer, font: *Font, text: string, pospx: ui.iv2, color: v4, dpr: f32) {
+	pospx := pospx;
+	start := pospx;
+	//font_h := font.height;
+	//pospx[1] += ui.iv2_with_dpr(measure_text(font, text), dpr)[1];
+	pospx[1] += cast(int, font.height as f32 * dpr);
+
+	for c in text {
+		if c == '\n' {
+			pospx[0] = start[0];
+			pospx[1] += cast(int, (font.height + LINES_PIXEL_GAP) as f32 * dpr);
+			continue;
+		}
+
+		g := get_glyph(font, c);
+		m := g.metrics;
+
+		posf := v2{pospx[0] as f32, pospx[1] as f32};
+		bearing := v2{m.bearingX, -m.bearingY} * .{dpr, dpr};
+		posf += bearing;
+		posi := ui.iv2{posf[0] as int, posf[1] as int};
+
+		pxsz := ui.iv2 {round_px(m.w * dpr) as int, round_px(m.h * dpr) as int};
+
+		pos := ui.px_size_to_screen(posi);
+		sz := ui.px_size_to_screen(pxsz);
+
+		pos[1] = MAX_Y - (pos[1] + sz[1]);
+
+		set_shader(r, .Box);
+		set_uniform(r.shader, "Color", color);
+		set_uniform(r.shader, "BoxSize", v2 {m.w, m.h});
+		set_uniform(r.shader, "TopRound", 0.0);
+		set_uniform(r.shader, "BotRound", 0.0);
+		draw_quad(r, g.texture, pos, sz, .{0, 1}, .{1, 0});
+		pospx[0] += ((m.advance + font.spacing) * dpr) as int;
+	}
+}
+

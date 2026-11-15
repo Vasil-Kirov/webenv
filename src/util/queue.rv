@@ -1,0 +1,49 @@
+module util;
+
+
+Queue :: struct<T> {
+	data: []T,
+	front: int,
+	size: int,
+	capacity: int,
+}
+
+make_queue :: fn(T: type, capacity: int) -> Queue<T> {
+	q: Queue<T>;
+	q.data.data = malloc(cast(uint, size_of(T) * capacity));
+	q.data.count = capacity;
+	q.front = 0;
+	q.size = 0;
+	q.capacity = capacity;
+	return q;
+}
+
+enqueue :: fn(q: *Queue<$T>, elem: T) {
+	#assert q.size < q.capacity;
+	q.data[(q.front + q.size) % q.capacity] = elem;
+	q.size += 1;
+}
+
+dequeue :: fn(q: *Queue<$T>) -> T {
+	#assert q.size > 0;
+	result := q.data[q.front];
+	q.front = (q.front + 1) % q.capacity;
+	q.size -= 1;
+	return result;
+}
+
+peek_queue :: fn(q: *Queue<$T>) -> *T {
+	#assert q.size > 0;
+	result := &q.data[q.front];
+	return result;
+}
+
+free_queue :: fn(q: *Queue<$T>) {
+	free(q.data.data);
+	*q = .{};
+}
+
+is_queue_empty :: fn(q: *Queue<$T>) -> bool {
+	return q.size == 0;
+}
+

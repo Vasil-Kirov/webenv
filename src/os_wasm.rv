@@ -1,0 +1,140 @@
+module os;
+
+#import wasm;
+#import io;
+#import mem;
+#import str;
+_ :: #import intrin;
+_ :: #import util;
+
+open :: fn(name: *u8, name_len: u32) -> i32 #wasm_import="imports","open_file";
+get_fsize :: fn(fd: i32) -> uint #wasm_import="imports","get_fsize";
+read_file :: fn(fd: i32) -> ?*u8 #wasm_import="imports","read_file";
+wasm_exit :: fn(code: i32) #no_return #wasm_import="imports","exit";
+
+
+sleep :: fn(u32) {
+	/* Cannot sleep here */
+}
+
+Mutex : type : int;
+MUTEX_INIT :: 0;
+
+#public
+read_env :: fn(name: string) -> string #nocheck {
+	return "";
+}
+
+lock_mutex :: fn(m: *Mutex) {
+	// @TODO:
+}
+
+unlock_mutex :: fn(m: *Mutex) {
+	// @TODO:
+}
+
+ThreadID :: u64;
+ThreadRetType :: *void;
+
+
+create_thread :: fn(start: fn(*void) -> ThreadRetType, arg: ?*void) -> (ThreadID, bool) #nocheck {
+	return 0, false;
+}
+
+wait_thread :: fn(thread: ThreadID) -> (int, bool) {
+	return 0, false;
+}
+
+kill_thread :: fn(id: ThreadID) {
+}
+
+delete_dir :: fn(path: string) -> bool {
+	return false;
+}
+
+delete_file :: fn(path: string) -> bool {
+	return false;
+}
+
+copy_file :: fn(from_: string, to_: string, overwrite: bool = true) -> bool {
+	return false;
+}
+
+mkdir :: fn(dir_: string) -> bool {
+	return false;
+}
+
+list_files :: fn(dir_: string, callback: fn(data: *ListFileData, arg: ?*) -> bool, arg: ?*) -> bool {
+	return false;
+}
+
+alloc :: fn(size: int, flags: AllocationFlags, perms: AllocationPerms) -> (?*, bool) {
+	_ := flags;
+	_ := perms;
+
+	p := util.malloc(size as u32);
+	if !p
+		return null, false;
+	return p, true;
+}
+
+free :: fn(ptr: ?*) {
+	util.free(ptr);
+}
+
+exit :: fn(code: int) #no_return {
+	wasm_exit(code);
+}
+
+abort :: fn() #no_return {
+	exit(1);
+}
+
+os_stream_fn :: fn(data: ?*void, op: io.StreamOp, p: []u8) -> (int, io.StreamError) #nocheck {
+	fd := cast(i32, data as uint);
+	p := p;
+	switch op {
+		case .Write: {
+			if fd == 0 {
+				wasm.logs(&p[0], len(p));
+				return len(p), .Ok;
+			}
+			return 0, .Failed;
+		}
+		case .Read: {
+			size := get_fsize(fd);
+			data := read_file(fd) or {
+				return 0, .Failed;
+			};
+			to_read := min(size, len(p) as uint);
+			for i in to_read {
+				p[i] = data[i];
+			}
+			return to_read as int, .Ok;
+		}
+		case .Size: {
+			return get_fsize(fd), .Ok;
+		}
+		case .Close: {
+			return 0, .Ok;
+		}
+		case _: {
+			return 0, .InvalidOp;
+		}
+	};
+	return 0, .Failed;
+}
+
+make_std_stream :: fn() -> io.Stream {
+	return .{ func = os_stream_fn, data = null };
+}
+
+make_file_stream :: fn(name: string, flags: FileOpenFlags, alloc: *mem.Allocator) -> (io.Stream, bool) {
+
+	fd := open(name.data, len(name) as u32);
+	if fd == -1
+		return io.Stream {func=os_stream_fn}, false;
+	return io.Stream { func = os_stream_fn, data = cast(*void, fd as uint) }, true;
+}
+
+

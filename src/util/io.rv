@@ -1,0 +1,623 @@
+module util;
+
+_ :: #import wasm;
+_ :: #import "reflect.rv";
+
+FLOAT_ROUND_AT := cast(i32, 10000);
+PRINT_TYPE_NAME := false;
+
+print_with_alloc :: fn(arena: *MemoryArena, str: string, args: ...) {
+	b := create_builder(arena);
+	internal_print(&b, str, args);
+	s := from_builder(&b);
+	log(s[:s.count-1]);
+}
+
+sprint :: fn(str: string, args: ...) -> string {
+	b := create_builder(temp_arena);
+	internal_print(&b, str, args);
+	return from_builder(&b);
+}
+
+print :: fn(str: string, args: ...) {
+	b := create_builder(temp_arena);
+	internal_print(&b, str, args);
+	s := from_builder(&b);
+	log(s[:s.count-1]);
+}
+
+println :: fn(str: string, args: ...) {
+	b := create_builder(temp_arena);
+	internal_print(&b, str, args);
+	//builder_append_u8(b, '\n');
+	s := from_builder(&b);
+	log(s[:s.count-1]);
+}
+
+vprint :: fn(str: string, args: []Arg)
+{
+	b := create_builder(temp_arena);
+	internal_print(&b, str, args);
+	s := from_builder(&b);
+	log(s[:s.count-1]);
+}
+
+#private
+
+is_digit :: fn(c: u32) -> bool {
+	return c >= '0' && c <= '9';
+}
+
+internal_print :: fn(builder: *Builder, fmt: string, args: []Arg) {
+	arg_count := 0;
+	need_to_print_arg := false;
+	for c in fmt {
+		if c == '%' && need_to_print_arg {
+			need_to_print_arg = false;
+			builder_append_u32(builder, '%');
+		}
+		else if c == '%' && args.count > arg_count {
+			need_to_print_arg = true;
+		} else {
+			if need_to_print_arg {
+				arg: Arg;
+				if is_digit(c) {
+					arg = args[c - '0'];
+				}
+				else {
+					arg = args[arg_count];
+					arg_count += 1;
+				}
+				print_type_with_formatter(builder, c, arg);
+				need_to_print_arg = false;
+			} else {
+				builder_append_u32(builder, c);
+			}
+		}
+	}
+
+	if need_to_print_arg {
+		arg := args[arg_count];
+		arg_count += 1;
+		print_type_with_formatter(builder, '\0', arg);
+		need_to_print_arg = false;
+	}
+}
+
+print_type_with_formatter :: fn(b: *Builder, c: u32, arg: Arg) {
+	t := type_info(arg.t);
+	if c == 's' && t.kind == TypeKind.Pointer && t.t.pointer.pointee == u8 {
+		str: *u8 = *cast(**u8, arg.val);
+		for i := 0; str[i] != '\0'; i += 1 {
+			builder_append_u8(b, str[i]);
+		}
+	} else if c == 'c' && t.kind == TypeKind.Basic &&
+	(t.t.basic.kind == BasicKind.U8 || t.t.basic.kind == BasicKind.U32) {
+		c: u32;
+		if t.t.basic.kind == BasicKind.U8 {
+			c = *cast(*u8, arg.val);
+		} else if t.t.basic.kind == BasicKind.U32 {
+			c = *cast(*u32, arg.val);
+		}
+		builder_append_u32(b, c);
+	} else {
+		print_type(b, arg);
+		if c != 0 && !is_digit(c)
+			builder_append_u32(b, c);
+	}
+}
+
+print_type :: fn(b: *Builder, arg: base.Arg) {
+	t := type_info(arg.t);
+	switch t.kind {
+		case base.TypeKind.Invalid: {
+		}
+		case TypeKind.Basic: {
+			basic := t.t.basic;
+			if basic.kind == BasicKind.Bool {
+				if *cast(*bool, arg.val) {
+					builder_append(b, "true");
+				} else {
+					builder_append(b, "false");
+				}
+			}
+			else if basic.kind == BasicKind.String {
+				str: string = *cast(*string, arg.val);
+				builder_append(b, str);
+			}
+			//else if basic.kind == base.BasicKind.Cstring {
+			//    str: cstring = *@*cstring arg.val;
+			//    for i := 0; str[i] != '\0'; i += 1 {
+			//        array.add(b, str[i]);
+			//    }
+
+			//}
+			else if basic.kind == BasicKind.U8  {
+				num: uint = *cast(*u8, arg.val);
+				format_uint(b, num);
+			}
+			else if basic.kind == BasicKind.U16 {
+				num: uint = *cast(*u16, arg.val);
+				format_uint(b, num);
+			}
+			else if basic.kind == BasicKind.U32 {
+				num: uint = *cast(*u32, arg.val);
+				format_uint(b, num);
+			}
+			//else if basic.kind == BasicKind.U64 {
+			//    num: uint = *cast(*u64, arg.val);
+			//    format_uint(b, num);
+			//}
+
+			else if basic.kind == BasicKind.I8  {
+				num: int = *cast(*i8, arg.val);
+				format_int(b, num);
+			}
+			else if basic.kind == BasicKind.I16 {
+				num: int = *cast(*i16, arg.val);
+				format_int(b, num);
+			}
+			else if basic.kind == BasicKind.I32 {
+				num: int = *cast(*i32, arg.val);
+				format_int(b, num);
+			}
+			//else if basic.kind == BasicKind.I64 {
+			//    num: int = *cast(*i64, arg.val);
+			//    format_int(b, num);
+			//}
+
+			else if basic.kind == BasicKind.Int {
+				num: int = *cast(*int, arg.val);
+				format_int(b, num);
+			}
+			else if basic.kind == BasicKind.Uint {
+				num: uint = *cast(*uint, arg.val);
+				format_uint(b, num);
+			}
+			else if basic.kind == BasicKind.F32 {
+				num := *cast(*f32, arg.val);
+				format_float(f32, b, num, FLOAT_ROUND_AT);
+			}
+			else if basic.kind == BasicKind.F64 {
+				num := *cast(*f64, arg.val);
+				format_float(f64, b, num, FLOAT_ROUND_AT);
+			}
+			else if basic.kind == BasicKind.Type {
+				pt := *cast(*type, arg.val);
+				info := type_info(pt);
+				print_typetype(b, info);
+			}
+			else {
+				builder_append_u32(b, '%');
+			}
+		}
+		case TypeKind.Function: {
+		}
+		case TypeKind.Struct: {
+			st := t.t.struct_;
+			if PRINT_TYPE_NAME
+				builder_append(b, st.name);
+			builder_append(b, " { ");
+			for n in st.members.count {
+				m := st.members[n];
+				builder_append(b, m.name);
+				builder_append(b, " = ");
+				ptr := arg.val as *u8;
+				offset := get_struct_member_offset(st, n);
+				mem_arg := Arg {
+					t = m.t,
+					val = &ptr[offset],
+				};
+				mem_arg.t = m.t;
+
+				print_type(b, mem_arg);
+				if n + 1 != st.members.count {
+					builder_append(b, ", ");
+				}
+			}
+			builder_append(b, " }");
+		}
+		case TypeKind.Pointer: {
+			num: uint = *cast(*uint, arg.val);
+			format_uint(b, num);
+		}
+		case TypeKind.Array: {
+			at := t.t.array;
+			if PRINT_TYPE_NAME {
+				builder_append_u32(b, '[');
+				format_uint(b, at.member_count);
+				builder_append_u32(b, ']');
+			}
+			builder_append(b, "{ ");
+
+			size := get_type_size(at.t);
+			elem := arg.val as *u8;
+			for i in at.member_count {
+				if i != 0 builder_append(b, ", ");
+				print_type(b, .{at.t, elem});
+				elem += size;
+			}
+			builder_append(b, " }");
+		}
+		case TypeKind.Slice: {
+			st := t.t.slice;
+			count := *cast(*int, arg.val);
+			data := cast(*u8, *(cast(*uint, arg.val)+1));
+			if PRINT_TYPE_NAME
+				builder_append(b, "[]");
+			builder_append(b, "{ ");
+
+			size := get_type_size(st.t);
+
+			for i in count {
+				if i != 0 builder_append(b, ", ");
+				print_type(b, .{st.t, data});
+				data += size;
+			}
+			builder_append(b, " }");
+		}
+		case TypeKind.Vector: {
+			vect := t.t.vector;
+			at := arg.val as *u8;
+			builder_append(b, "{ ");
+			for i in vect.elem_count {
+				if i != 0 builder_append(b, ", ");
+				switch vect.kind {
+					case .Float: {
+						num := *cast(*f32, at);
+						format_float(f32, b, num, FLOAT_ROUND_AT);
+					}
+					case .Int: {
+						num := *cast(*i32, at);
+						format_int(b, num);
+					}
+					case .UInt: {
+						num := *cast(*u32, at);
+						format_uint(b, num);
+					}
+				};
+				at += 4;
+			}
+			builder_append(b, " }");
+		}
+		case TypeKind.Enum: {
+			e := t.t.enum_;
+			size := get_type_size(e.t);
+			val := switch size {
+				case 1: { yield (*cast(*i8 , arg.val)) as int; }
+				case 2: { yield (*cast(*i16, arg.val)) as int; }
+				case 4: { yield (*cast(*i32, arg.val)) as int; }
+				case 8: { yield (*cast(*i64, arg.val)) as int; }
+			};
+
+			for m in e.members {
+				if m.value == val {
+					builder_append(b, m.name);
+					break;
+				}
+			}
+		}
+		case TypeKind.Generic: {
+		}
+	};
+}
+
+print_typetype :: fn(b: *Builder, info: *TypeInfo) {
+	switch info.kind {
+		case TypeKind.Invalid: {
+			builder_append(b, "invalid");
+		}
+		case TypeKind.Basic: {
+			builder_append(b, info.t.basic.name);
+		}
+		case TypeKind.Function: {
+			builder_append(b, "fn(");
+			args := info.t.function.args_t;
+			for i, arg in args {
+				print_typetype(b, type_info(arg));
+				if i + 1 != args.count {
+					builder_append(b, ", ");
+				}
+			}
+			builder_append(b, ")");
+			if info.t.function.returns.count != 0 {
+				builder_append(b, " -> ");
+				for i, t in info.t.function.returns {
+					if i != 0
+						builder_append(b, ", ");
+					print_typetype(b, type_info(t));
+				}
+			}
+		}
+		case TypeKind.Struct: {
+			builder_append(b, info.t.struct_.name);
+		}
+		case TypeKind.Pointer: {
+			builder_append(b, "*");
+			if info.t.pointer.pointee as u32 == 0xFFFF_FFFF {
+				builder_append(b, "void");
+			} else {
+				print_typetype(b, type_info(info.t.pointer.pointee));
+			}
+		}
+		case TypeKind.Array: {
+			builder_append_u8(b, '[');
+			format_uint(b, info.t.array.member_count);
+			builder_append_u8(b, ']');
+			print_typetype(b, type_info(info.t.array.t));
+		}
+		case TypeKind.Slice: {
+			builder_append(b, "[]");
+			print_typetype(b, type_info(info.t.slice.t));
+		}
+		case TypeKind.Vector: {
+			vect := info.t.vector;
+			builder_append_u8(b, '<');
+			switch vect.kind {
+				case .Float: {
+					builder_append(b, "f32x");
+				}
+				case .Int: {
+					builder_append(b, "i32x");
+				}
+				case .UInt: {
+					builder_append(b, "u32x");
+				}
+			};
+			format_uint(b, vect.elem_count);
+			builder_append_u8(b, '>');
+		}
+		case TypeKind.Enum: {
+			builder_append(b, info.t.enum_.name);
+		}
+		case TypeKind.Generic: {
+			builder_append(b, info.t.generic.name);
+		}
+	};
+}
+
+/*
+*
+*    Builder from std/strings.rv
+*
+*/
+
+#public
+
+NODE_BUF_SIZE :: 128;
+StringNode :: struct {
+	text: [128]u8,
+	at: int,
+	next: ?*StringNode,
+}
+
+Builder :: struct {
+	node: StringNode,
+	count: int,
+	alloc: *MemoryArena,
+}
+
+create_builder :: fn (alloc: *MemoryArena) -> Builder {
+	builder: Builder;
+	builder.node.at = 0;
+	builder.node.next = null;
+	memset(&builder.node.text[0], 0, NODE_BUF_SIZE);
+	builder.count = 0;
+	builder.alloc = alloc;
+	return builder;
+}
+
+builder_append :: fn(b: *Builder, str: string) {
+	for i in str.count {
+		builder_append_u8(b, str[i]);
+	}
+}
+
+builder_append_u32 :: fn(b: *Builder, c: u32) {
+	b := b;
+	c := c;
+	if c <= 0x7F {
+		builder_append_u8(b, c as u8);
+	} else if c <= 0x7FF { 
+		second := cast(u8, c & 0b0011_1111);
+		c >>= 6;
+		first  := cast(u8, c & 0b0001_1111);
+
+		builder_append_u8(b, cast(u8, (0b1100_0000 | first)));
+		builder_append_u8(b, cast(u8, (0b1000_0000 | second)));
+	} else if c <= 0xFFFF {
+		third  := cast(u8, c & 0b0011_1111);
+		c >>= 6;
+		second := cast(u8, c & 0b0011_1111);
+		c >>= 6;
+		first  := cast(u8, c & 0b0000_1111);
+
+		builder_append_u8(b, cast(u8, (0b1110_0000 | first)));
+		builder_append_u8(b, cast(u8, (0b1000_0000 | second)));
+		builder_append_u8(b, cast(u8, (0b1000_0000 | third)));
+	} else {
+		forth  := cast(u8, c & 0b0011_1111);
+		c >>= 6;
+		third  := cast(u8, c & 0b0011_1111);
+		c >>= 6;
+		second := cast(u8, c & 0b0011_1111);
+		c >>= 6;
+		first  := cast(u8, c & 0b0000_0111);
+		builder_append_u8(b, cast(u8, (0b1111_0000 | first)));
+		builder_append_u8(b, cast(u8, (0b1000_0000 | second)));
+		builder_append_u8(b, cast(u8, (0b1000_0000 | third)));
+		builder_append_u8(b, cast(u8, (0b1000_0000 | forth)));
+	}
+}
+
+builder_append_u8 :: fn(b: *Builder, c: u8) {
+	b := b;
+	node := &b.node;
+	for {
+		nnode := node.next;
+		if nnode == null break;
+		node = nnode;
+	}
+
+	if node.at == NODE_BUF_SIZE {
+		node.next = make_t(b.alloc, StringNode);
+		nnode := node.next;
+		if nnode == null
+			return;
+		nnode.at = 0;
+		nnode.next = null;
+		memset(&nnode.text[0], 0, NODE_BUF_SIZE);
+		node = nnode;
+	}
+	node.text[node.at] = c;
+	node.at += 1;
+	b.count += 1;
+}
+
+from_builder :: fn (b: *Builder) -> string {
+	len := b.count + 1;
+	data := make_slice(b.alloc, len, u8);
+	scan := &data[0];
+	node := cast(?*StringNode, &b.node);
+	for {
+		if node == null
+			break;
+
+		memcopy(scan, &node.text[0], node.at);
+		scan += node.at;
+
+		was := node;
+		nnode := node.next;
+		if nnode == null
+			break;
+		node = nnode;
+	}
+	*scan = 0;
+	return string { len, &data[0] };
+}
+
+format_uint :: fn(b: *Builder, num_in: uint) {
+	temp := [256]u32{};
+	num := num_in;
+	if num == 0 {
+		builder_append_u32(b, '0');
+		return;
+	}
+
+	count := 0;
+	for num > 0 {
+		digit := num % 10;
+		num /= 10;
+		c := '0' + digit;
+		temp[count] = c as u32;
+		count += 1;
+	}
+
+	for i in count {
+		builder_append_u32(b, temp[count - i - 1]);
+	}
+}
+
+format_int :: fn(b: *Builder, num_in: int) {
+	temp := [256]u32{};
+	num := num_in;
+	if num == 0 {
+		builder_append_u32(b, '0');
+		return;
+	}
+
+	is_neg := false;
+	if num < 0 {
+		num = 0 - num;
+		is_neg = true;
+	}
+
+	count := 0;
+	for num > 0 {
+		digit := num % 10;
+		num /= 10;
+		c := '0' + digit as u8;
+		temp[count] = c;
+		count += 1;
+	}
+
+	if is_neg builder_append_u32(b, '-');
+
+	for i in count {
+		builder_append_u32(b, temp[count - i - 1]);
+	}
+}
+
+format_float :: fn(ft: type, b: *Builder, num: ft, round_at: i32) {
+	if num == inf {
+		builder_append(b, "INF");
+		return;
+	}
+	if num == -inf {
+		builder_append(b, "-INF");
+		return;
+	}
+	if num == nan {
+		builder_append(b, "NaN");
+		return;
+	}
+
+	if ft != f32 && ft != f64 {
+		return;
+	}
+
+	if num == 0 {
+		builder_append_u32(b, '0');
+		return;
+	}
+
+	is_neg := false;
+	if num < 0 {
+		num = -num;
+		is_neg = true;
+	}
+
+	num += 0.5 / cast(ft, round_at);
+	int_part := cast(i32, num);
+	frac_part := num - int_part as f32; //cast(i32, (num - cast(ft, int_part)) * round_at);
+
+	if is_neg {
+		builder_append_u8(b, '-');
+	}
+
+	format_int(b, int_part);
+	builder_append_u8(b, '.');
+
+	digits := 0;
+	tmp := round_at;
+	for tmp > 1 {
+		digits += 1;
+		tmp /= 10;
+	}
+
+	if frac_part != 0 {
+		size_before := b.count;
+		tmp := (frac_part * round_at) as int;
+		digits_copy := digits;
+		for tmp {
+			tmp /= 10;
+			digits_copy -= 1;
+		}
+		for i in digits_copy {
+			builder_append_u8(b, '0');
+		}
+
+		format_int(b, (frac_part * round_at) as int);
+		written := b.count - size_before;
+		for written < digits {
+			builder_append_u8(b, '0');
+			written -= 1;
+		}
+	}
+	else {
+		for i := 1; i < round_at; i *= 10 {
+			builder_append_u8(b, '0');
+		}
+	}
+}
+

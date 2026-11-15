@@ -1,0 +1,106 @@
+module build;
+
+_ :: #import io;
+_ :: #import misc;
+_ :: #import compile;
+_ :: #import "collections.rv";
+#import os;
+#import ast;
+#import array;
+#import mem;
+#import str;
+
+WEBENV_DIR :: #run os.read_env("WEBENV_DIR");
+VUI_DIR :: #run os.read_env("VUI_DIR");
+
+exports := [2048]string {};
+export_count := 0;
+
+webenv_files :: []string {
+	"os_wasm.rv",
+	"wasm.rv", "xorshiro256starstar.rv",
+	"renderer.rv", "gl.rv", "math.rv", "text.rv",
+	"util/assets.rv", "util/memory.rv", "util/queue.rv",
+	"net/sock.rv", "net/events.rv",
+	"input.rv",
+	"ui_implement.rv",
+	"ui/ui.rv", "ui/anim.rv", "ui/button.rv", "ui/panel.rv", "ui/input.rv", "ui/label.rv", "ui/gap.rv", "ui/checkbox.rv",
+	"bstream.rv", "entry.rv",
+};
+
+system :: fn(cmd: *u8) -> i32 #foreign;
+
+build :: fn() -> CompileInfo {
+	files := array.create(string, &mem.heap);
+	for file in webenv_files
+		array.add(&files, file);
+	array.add(&files, "demo.rv");
+
+	defines := array.create(string, &mem.heap);
+	for arg in get_build_args() {
+		array.add(&defines, arg);
+	}
+	array.add(&defines, "NoMain");
+
+	wasm_flags: CompileFlag = .NoLink | .NoLibC;
+    return .{
+        files = files,
+		source_dirs = compile_mem([]string {VUI_DIR, WEBENV_DIR}),
+        opt = 0,
+        flags = .DebugInfo | wasm_flags/* | .DisableBoundsCheck*/,
+		entry_point = "entry",
+		arch = .Wasm32,
+		internals_file = "internal.rv",
+		defines = defines,
+    };
+}
+
+#run {
+	//if contains(get_build_args(), "DEMO") {
+	ci := build();
+	add_build_target("demo", ci);
+	//}
+}
+
+inspect_ast :: fn(nodes: []*ast.Node) {
+	for node in nodes {
+		if node.t == .FN {
+			if node.u.fn_.tag == "wexport" {
+				exports[export_count++] = node.u.fn_.name;
+ 				#assert export_count < 1024;
+			}
+		}
+	}
+}
+
+MODULE_IDX := 0;
+after_link :: fn(objs: []string) {
+	//STACK_SIZE :: 1048576;
+	HEAP_SIZE :: mem.mb(128);//67108864;
+	INITIAL_MEMORY :: mem.mb(256);
+	MAX_MEMORY :: mem.gb(1);
+
+
+	b := str.create_builder(&mem.temp_alloc);
+	str.builder_append(&b, "wasm-ld --no-entry ");
+	str.builder_append(&b, sprint("--initial-heap=% ", HEAP_SIZE));
+	str.builder_append(&b, sprint("--initial-memory=% ", INITIAL_MEMORY));
+	str.builder_append(&b, sprint("--max-memory=% ", MAX_MEMORY));
+	for obj in objs {
+		str.builder_append(&b, sprint("bin/% ", obj));
+	}
+	for i in export_count {
+		str.builder_append(&b, sprint("--export % ", exports[i]));
+	}
+	str.builder_append(&b, "-o bin/module.wasm");
+	cmd := str.from_builder(&b, &mem.temp_alloc);
+
+	code := system(cmd.data);
+	if code != 0 {
+		println("BUILD ERROR %!", code);
+	}
+	for obj in objs {
+		os.delete_file(sprint("bin/%", obj));
+	}
+	println("Done!");
+}

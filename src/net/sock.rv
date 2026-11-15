@@ -1,0 +1,16 @@
+module net;
+
+SocketID :: int;
+INVALID_SOCKET :: -1 as SocketID;
+
+ws_open_ :: fn(url: *u8, cb: *void) -> SocketID #foreign #wasm_import="imports","ws_open";
+ws_send_ :: fn(id: SocketID, ptr: *void, len: int) #foreign #wasm_import="imports","ws_send";
+ws_close :: fn(id: SocketID) #foreign #wasm_import="imports","ws_close";
+
+ws_open :: fn(url: *u8, cb: fn(SocketID, SocketEvent, []u8)) -> SocketID {
+	return ws_open_(url, cb);
+}
+ws_send :: fn(id: SocketID, data: []u8) {
+	ws_send_(id, data.data, data.count);
+}
+

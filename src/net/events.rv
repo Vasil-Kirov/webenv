@@ -1,0 +1,29 @@
+module net;
+
+_ :: #import util;
+
+
+SocketEvent :: enum
+{
+	Open    = 0,
+	Close   = 1,
+	Error   = 2,
+	Message = 3,
+}
+
+socket_on_open :: fn(id: SocketID, cb: fn(SocketID, SocketEvent, []u8)) #foreign #tag="wexport" {
+	cb(id, .Open, .{});
+}
+
+socket_on_error :: fn(id: SocketID, cb: fn(SocketID, SocketEvent, []u8)) #foreign #tag="wexport" {
+	cb(id, .Error, .{});
+}
+
+socket_on_close :: fn(id: SocketID, cb: fn(SocketID, SocketEvent, []u8)) #foreign #tag="wexport" {
+	cb(id, .Close, .{});
+}
+
+socket_on_message :: fn(id: SocketID, ptr: *u8, len: uint, cb: fn(SocketID, SocketEvent, []u8)) #foreign #tag="wexport" {
+	cb(id, .Message, ptr[:len]);
+}
+

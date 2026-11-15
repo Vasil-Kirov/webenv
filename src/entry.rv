@@ -1,0 +1,67 @@
+module main;
+
+#import app;
+
+_ :: #import math;
+_ :: #import input;
+_ :: #import ui;
+_ :: #import util;
+_ :: #import renderer;
+_ :: #import wasm;
+#import xorrand;
+
+EntryInfo :: struct {
+	rend: *Renderer,
+	width: u32,
+	height: u32,
+	font: *Font,
+	asset_manager: AssetManager,
+}
+
+rend: Renderer;
+memory_arena: MemoryArena;
+
+entry :: fn(js_width: f32, js_height: f32) -> ?* #foreign #tag="wexport" {
+	init_heap();
+	init_ui();
+
+	memory_arena = init_arena(mb(1));
+	temp_arena = &memory_arena;
+
+
+	xorrand.seed(cast(u64, random_seed()));
+	xorrand.long_jump();
+
+	width := js_width as u32;
+	height := js_height as u32;
+	rend, ok := make_renderer(width, height);
+	if !ok return null;
+
+	font := load_font(c"28px 'Times New Roman'", 28);
+	asset_manager := create_asset_manager();
+
+	info: EntryInfo = .{
+		rend = &rend,
+		width = width,
+		height = height,
+		font = font,
+		asset_manager = asset_manager,
+	};
+	r := app.start(info);
+
+
+	return r;
+}
+
+on_resize :: fn(user_ptr: *void, w: f32, h: f32) #foreign #tag="wexport" {
+	resize_screen(&rend, w as u32, h as u32);
+	resize_canvas(w as u32, h as u32);
+	app.on_resize(user_ptr, w as u32, h as u32);
+}
+
+update :: fn(user_ptr: *void, dt: f32) #foreign #tag="wexport" {
+	app.update(user_ptr, dt);
+}
+
+
+

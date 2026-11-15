@@ -1,0 +1,258 @@
+module util;
+
+_ :: #import wasm;
+#import os;
+#import io;
+#import mem;
+
+temp_arena: *MemoryArena;
+
+kb :: fn(b: uint) -> uint { return b << 10; }
+mb :: fn(b: uint) -> uint { return b << 20; }
+gb :: fn(b: uint) -> uint { return b << 30; }
+
+HEAP_SIZE :: #run mb(64);
+__heap_base: u8 #link="__heap_base";
+__heap_end: u8 #link="__heap_end";
+used_heap: uint = 0;
+
+mheap_start: uint = 0;
+mheap_at: uint = 0;
+
+
+MemoryArena :: struct {
+	start: *u8,
+	at: *u8,
+	end: *u8,
+}
+
+init_arena :: fn(size: uint) -> MemoryArena {
+	heap_base: uint = cast(uint, &__heap_base);
+	heap_end: uint = cast(uint, &__heap_end);
+ 	#assert used_heap+size <= heap_end - heap_base;
+
+	at := cast(*u8, heap_base+used_heap);
+	arena: MemoryArena = .{at, at, heap_end };
+	used_heap += size;
+	return arena;
+}
+
+reset_arena :: fn(arena: *MemoryArena) {
+	arena.at = arena.start;
+}
+
+arena_alloc :: fn(arena: *MemoryArena, size: uint) -> *u8 {
+	arena.at = align_pow2(arena.at as uint, 16) as *u8;
+	r := arena.at;
+	arena.at += size;
+	#assert arena.at <= arena.end;
+	return r;
+}
+
+make_slice :: fn(arena: *MemoryArena, count: int, T: type) -> []T {
+	mem := arena_alloc(arena, cast(uint, count * size_of T));
+	return cast(*T, mem)[:count];
+}
+
+make_t :: fn(arena: *MemoryArena, T: type) -> *T {
+	mem := arena_alloc(arena, cast(uint, size_of T));
+	return mem as *T;
+}
+
+NUM_CLASSES :: 14;
+CLASS_SIZES :: []uint {
+	16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072
+};
+
+FreeStack :: struct {
+	count: uint,
+	first: uint,
+}
+
+AllocHeader :: struct {
+	magic: u32,
+	class: u32,
+	reserved0: u32,
+	reserved1: u32,
+}
+
+AllocFooter :: struct {
+	magic: u32,
+}
+
+ALLOC_MAGIC: u32: 0xDEADBEEF;
+
+arena_to_alloc :: fn(arena: MemoryArena) -> mem.Allocator {
+	arena := arena;
+	ptr := arena_alloc(&arena, cast(uint, size_of MemoryArena));
+	memcpy(ptr, &arena, size_of MemoryArena);
+	return .{
+		alloc = fn(size: int, this: *mem.Allocator) -> ?* {
+			return arena_alloc(this.data, size as uint);
+		},
+		free = mem.no_free,
+		data = ptr,
+	};
+}
+
+// @NOTE: Completely disregards any previous allocations,
+// only used before aborting immediately after
+// Vasko - 09/07/2026
+abort_allocator :: fn() -> mem.Allocator {
+	heap_base: uint = cast(uint, &__heap_base);
+	heap_end: uint = cast(uint, &__heap_end);
+
+	at := cast(*u8, heap_base);
+	arena: MemoryArena = .{at, at, cast(*u8, heap_end) };
+	return arena_to_alloc(arena);
+}
+
+get_heap_size :: fn() -> uint {
+	freed: uint = 0;
+	for class, size in CLASS_SIZES {
+		alloc_size := align_pow2(size + cast(uint, size_of AllocHeader) + cast(uint, size_of AllocFooter), 16);
+		freed += free_bins[class].count as uint * alloc_size;
+	}
+	return mheap_at - mheap_start - freed;
+}
+
+init_heap :: fn() {
+	heap_base: uint = cast(uint, &__heap_base);
+	//heap_end: uint = cast(uint, &__heap_end);
+	mheap_start = align_pow2(heap_base+used_heap, 16);
+	mheap_at = mheap_start;
+	used_heap = (mheap_start-heap_base) + HEAP_SIZE;
+}
+
+malloc :: fn(size: u32) -> *void #foreign #tag="wexport" {
+	class := class_for_size(size);
+	if class < 0 {
+		alloc := abort_allocator();
+		w := os.make_std_stream();
+		io.writef_alloc(&w, &alloc, "Invalid malloc, size too big %.", size);
+		abort();
+	}
+
+	class_size := CLASS_SIZES[class];
+	alloc_size := align_pow2(class_size + cast(uint, size_of AllocHeader) + cast(uint, size_of AllocFooter), 16);
+	bin := &free_bins[class];
+	block: uint;
+
+	from_free_list := false;
+	if bin.count != 0 {
+		from_free_list = true;
+		block = get_free_block(bin);
+	} else {
+		block = mheap_at;
+		new_at := mheap_at + alloc_size;
+		if new_at > mheap_start+HEAP_SIZE || new_at < mheap_at {
+			alloc := abort_allocator();
+			w := os.make_std_stream();
+			io.writef_alloc(&w, &alloc, "Heap overflow with allocation of size %.", size); 
+			abort();
+		}
+		mheap_at = new_at;
+	}
+
+	if block < mheap_start || block >= mheap_at {
+		alloc := abort_allocator();
+		w := os.make_std_stream();
+		if from_free_list
+			io.writef_alloc(&w, &alloc, "Heap corruption! Invalid block found in freelist. %", block);
+		else
+			io.writef_alloc(&w, &alloc, "Heap corruption! Invalid block from bump allocation? %", block);
+		abort();
+	}
+
+	header := cast(*AllocHeader, block);
+	header.magic = ALLOC_MAGIC;
+	header.class = cast(u32, class);
+	footer := get_alloc_footer(header);
+	footer.magic = ALLOC_MAGIC;
+
+	p := cast(*void, header+1);
+	memset(p, 0, cast(int, size));
+	return p;
+}
+
+free :: fn(p: ?*void) #foreign #tag="wexport" {
+	if p == null
+		return;
+
+	w := os.make_std_stream();
+	if cast(uint, p) < mheap_start + cast(uint, size_of AllocHeader) || cast(uint, p) >= mheap_at {
+		alloc := abort_allocator();
+		io.writef_alloc(&w, &alloc, "Invalid free, pointer out of heap range. %", p);
+		abort();
+	}
+
+	if cast(uint, p) & 15 != 0 {
+		alloc := abort_allocator();
+		io.writef_alloc(&w, &alloc, "Invalid free, pointer is not 16 byte aligned. %", p);
+		abort();
+	}
+
+	header := cast(*AllocHeader, p) - 1;
+	if header.magic != ALLOC_MAGIC {
+		alloc := abort_allocator();
+		io.writef_alloc(&w, &alloc, "Invalid free, magic is %.", header.magic);
+		abort();
+	}
+	if header.class >= NUM_CLASSES as uint {
+		alloc := abort_allocator();
+		io.writef_alloc(&w, &alloc, "Invalid header of size %, memory corruption.", header.class);
+		abort();
+	}
+	footer := get_alloc_footer(header);
+	if footer.magic != ALLOC_MAGIC { 
+		alloc := abort_allocator();
+		io.writef_alloc(&w, &alloc, "Invalid magic at footer, heap buffer overflow at %.", p as uint);
+		abort();
+	}
+
+
+	// @Note: Currently the free list overwrites this, might want to
+	// change that, but for now it doesn't really matter
+	// Vasko - 17/07/2026
+	header.magic = 0; // poison
+	footer.magic = 0; // poison
+
+	bin := &free_bins[header.class];
+	bin.count++;
+	location := cast(*uint, header);
+	*location = bin.first;
+	bin.first = cast(uint, location);
+}
+
+memcopy :: fn (dst: *, src: *,   size: int) -> * #foreign #link="memcpy";
+memset  :: fn (dst: *, val: i32, size: int) -> * #foreign #link="memset";
+
+#private
+
+free_bins: [NUM_CLASSES]FreeStack = .{};
+
+get_alloc_footer :: fn(header: *AllocHeader) -> *AllocFooter {
+	class_size := CLASS_SIZES[header.class];
+	return cast(*AllocFooter, cast(uint, header + 1) + class_size);
+}
+
+class_for_size :: fn(n: uint) -> int {
+	for i, size in CLASS_SIZES {
+		if size >= n return i;
+	}
+	return -1;
+}
+
+get_free_block :: fn(bin: *FreeStack) -> uint {
+	#assert bin.count > 0;
+	bin.count--;
+	block := bin.first;
+	next := *cast(*uint, block);
+	if bin.count != 0 {
+		bin.first = next;
+	} else {
+		bin.first = 0;
+	}
+	return block;
+}
+

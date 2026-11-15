@@ -1,0 +1,98 @@
+module net;
+
+_ :: #import game_logic;
+_ :: #import game_header;
+_ :: #import game;
+_ :: #import client;
+_ :: #import util;
+
+GetPacketSize :: fn(header: packet_header, *u8) -> int #link="game_logic.GetPacketSize";
+
+game_struct_ptr: *Game;
+
+net_message :: fn(id: SocketID, e: SocketEvent, buf: []u8)
+{
+	switch e {
+		case .Open:
+		{
+			ClientSendJoinPacket(id);
+		}
+		case .Close:
+		{
+			println("Server connection closed...");
+		}
+		case .Error:
+		{
+			println("Server connection error!");
+		}
+		case .Message:
+		{
+			ClientState.StartingHandCallback = StartingHandCallback;
+			ClientState.ActionCallback = ActionCallback;
+			ClientState.ActionTimeoutCallback = ActionTimeoutCallback;
+			ClientState.TopdeckInfoCallback = TopdeckInfoCallback;
+
+			ClientState.ResolveAlterTheFutureCallback = ResolveAlterTheFutureCallback;
+			ClientState.ResolveDefuseCallback = ResolveDefuseCallback;
+			ClientState.ResolveZombieKittenCallback = ResolveZombieKittenCallback;
+
+			ClientState.ExplodingKittenCallback = ExplodingKittenCallback;
+			ClientState.AddedCardCallback = AddedCardCallback;
+			ClientState.DiscardedCardCallback = DiscardedCardCallback;
+
+			buf := buf;
+			g := game_struct_ptr;
+			ClientOnMessage(id, buf);
+		}
+	};
+}
+
+card_type_to_asset_id :: fn(c: card_type) -> AssetID {
+	return (cast(int, card)+1) as AssetID;
+}
+
+StartingHandCallback :: fn(p: *packet_starting_hand, cards: *card_type) {
+	g := game_struct_ptr;
+
+	for card in cards[:p.CardCount] {
+		#assert card < cast(u8, card_type.CARD_TYPE_COUNT);
+		draw_card(g, card_type_to_asset_id(card));
+	}
+}
+
+ActionCallback :: fn(p: *packet_action) {
+	print("ActionCallback()");
+}
+
+ActionTimeoutCallback :: fn(p: *packet_action_timeout) {
+	print("ActionTimeoutCallback()");
+}
+
+TopdeckInfoCallback :: fn(p: *packet_topdeck_info) {
+	print("TopdeckInfoCallback()");
+}
+	
+ResolveAlterTheFutureCallback :: fn(top_cards: *card_type, card_count: u8) {
+	print("ResolveAlterTheFutureCallback()");
+}
+
+ResolveDefuseCallback :: fn(ExplodingKittenDeckPosition: *u8) {
+	print("ResolveDefuseCallback()");
+}
+
+ResolveZombieKittenCallback :: fn(RevivePlayerIndex: *u8) {
+	print("ResolveZombieKittenCallback()");
+}
+	
+ExplodingKittenCallback :: fn(PlayerIndex: u8) {
+	print("ExplodingKittenCallback()");
+}
+
+AddedCardCallback :: fn(Card : card_type) {
+	print("AddedCardCallback()");
+}
+
+DiscardedCardCallback :: fn(CardIndex : u8) {
+	print("DiscardedCardCallback()");
+}
+

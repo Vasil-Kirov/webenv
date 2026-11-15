@@ -1,0 +1,136 @@
+module wasm;
+
+wload_img :: fn(name: *u8, callback_arg: *void) #wasm_import="imports","load_img";
+random_seed :: fn() -> u64 #wasm_import="imports","random_seed64";
+logs :: fn(s: *u8, count: int) #wasm_import="imports","wasm_logs";
+logs_number :: fn(s: *u8, count: int, n: int) #wasm_import="imports","wasm_log_number";
+logs_floats :: fn(s: *u8, count: int, n1: f32, n2: f32) #wasm_import="imports","wasm_log_floats";
+abort :: fn() #wasm_import="imports","wasm_abort";
+resize_canvas :: fn(w: u32, h: u32) #wasm_import="imports","resize_canvas";
+get_ms :: fn() -> f32 #wasm_import="imports","wasm_get_ms";
+get_dpr :: fn() -> f32 #wasm_import="imports","get_dpr";
+open_virtual_keyboard :: fn(x: f32, y: f32, w: f32, h: f32) #wasm_import="imports","open_virtual_keyboard";
+close_virtual_keyboard :: fn() #wasm_import="imports","close_virtual_keyboard";
+
+/*
+memcmp :: fn(p1: *u8, p2: *u8, n: uint) -> c_int #link="memcmp" #foreign {
+	i: uint = 0;
+
+	if p1 == p2
+	return 0;
+
+	for (i < n) && (*p1 == *p2) {
+		i++;
+		p1++;
+		p2++;
+	}
+
+	return if i == n then 0 else cast(c_int, *p1 - *p2);
+}
+*/
+
+memmove :: fn(dest: *void, src: *void, len: int) -> *void #link="memmove" #foreign{
+	d := dest as *u8;
+	s := src as *u8;
+	if d < s {
+		for len-- {
+			*d = *s;
+			d++; s++;
+		}
+	} else {
+		lasts := s + len-1;
+		lastd := d + len-1;
+		for len-- {
+			*lastd = *lasts;
+			lastd--;
+			lasts--;
+		}
+	}
+	return dest;
+}
+/*
+memmove (void *dest, const void *src, size_t len)
+{
+  char *d = dest;
+  const char *s = src;
+  if (d < s)
+    while (len--)
+      *d++ = *s++;
+  else
+    {
+      char *lasts = s + (len-1);
+      char *lastd = d + (len-1);
+      while (len--)
+        *lastd-- = *lasts--;
+    }
+  return dest;
+}
+*/
+
+log_n :: fn(s: string, n: int) {
+	logs_number(s.data, s.count, n);
+}
+
+log_v2 :: fn(s: string, v: v2) {
+	logs_floats(s.data, s.count, v[0], v[1]);
+}
+
+log :: fn(s: string) {
+	logs(s.data, s.count);
+}
+
+strlen :: fn(s: *u8) -> int {
+	len := 0;
+	for s[len] != 0 {
+		len++;
+	}
+	return len;
+}
+
+make_u8 :: fn(data: *void, count: int) -> []u8 {
+	r: []u8;
+	r.data = data;
+	r.count = count;
+	return r;
+}
+
+fmodf :: fn(a: f32, b: f32) -> f32 #foreign {
+	q := a / b;
+	qi := cast(i32, q);
+
+    return a - cast(f32, qi) * b;
+}
+
+bit: fn(u32) -> u32 : n -> 1 << n;
+
+tolower :: fn(c: u32) -> u32 {
+	if c >= 'a' return c;
+	return c + 32;
+}
+
+align_to :: fn(x: $T, align: T) -> T {
+	rem := x % align;
+	if rem == 0 return x;
+	return x + (align - rem);
+}
+
+align_pow2 :: fn(address: $T, alignment: T) -> T {
+    return ((address + (alignment - 1)) & ~(alignment - 1));
+}
+
+if_opt :: fn(o: Optional<$T>, do: fn(T, ?*void), arg: ?*void) {
+	if o.ok
+		do(o.value, arg);
+}
+
+sort :: fn(a: []$T, cmp: fn(T, T) -> int) #nocheck {
+	a := a;
+	for i in a.count {
+		for j := i + 1; j < a.count; ++j {
+			if cmp(a[i], a[j]) > 0
+				a[i], a[j] = (a[j], a[i]);
+		}
+	}
+}
+
+

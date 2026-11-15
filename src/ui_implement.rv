@@ -1,0 +1,284 @@
+module ui;
+
+w :: #import wasm;
+#import math;
+r :: #import renderer;
+_ :: #import util;
+
+GPUTextureMaybe :: u32;
+GPUTexture :: u32;
+Font :: r.Font;
+
+MAX_X :: 10.0;
+MAX_Y :: 5.625;
+
+copy_to_clipboard :: fn(s: string) {
+}
+
+get_clipboard :: fn() -> string {
+	return "";
+}
+
+pow :: fn(a: f32, b: f32) -> f32 {
+	return math.pow(a, b);
+}
+
+sin :: fn(t: f32) -> f32 {
+	return math.sin(t);
+}
+
+cos :: fn(t: f32) -> f32 {
+	return math.cos(t);
+}
+
+ceil :: fn(t: f32) -> f32 {
+	return math.ceil(t);
+}
+
+handle_virtual_keyboard_input :: fn(text: string) {
+	focused := UI.focused;
+	text := text;
+	if focused {
+		if focused.vtable.identify() == "input" {
+			i := cast(*Input, focused);
+			if len(text) > 0
+				memcpy(&i.text_buf[0], &text[0], len(text));
+			i.text_len = len(text);
+			i.cursor = len(text);
+		}
+	}
+}
+
+memory_alloc :: fn(sz: u32) -> *void {
+	return malloc(sz);
+}
+
+memory_free :: fn(p: ?*) {
+	free(p);
+}
+
+start_text_input :: fn(b: Bounds) {
+	w.open_virtual_keyboard(b.pos[0] as f32, b.pos[1] as f32, b.size[0] as f32, b.size[1] as f32);
+	focused := UI.focused;
+	if focused {
+		if focused.vtable.identify() == "input" {
+			i := cast(*Input, focused);
+			i.text_len = 0;
+			i.cursor = 0;
+		}
+	}
+}
+
+stop_text_input :: fn() {
+	w.close_virtual_keyboard();
+}
+
+get_ms :: fn() -> u64 {
+	return w.get_ms() as u64;
+}
+
+get_font_height :: fn(f: *Font) -> int {
+	return f.height;
+}
+
+measure_text_px :: fn(f: *Font, text: string) -> iv2 {
+	res := r.measure_text(f, text);
+	return .{res[0], res[1]};
+}
+
+/*
+px_size_to_screen_phy :: fn(size: v2) -> v2 {
+	return .{
+		(size[0] / phy_width  as f32) * MAX_X,
+		(size[1] / phy_height as f32) * MAX_Y,
+	};
+}
+*/
+
+px_size_to_screen :: fn(size: iv2) -> v2 {
+	return .{
+		(size[0] as f32 / screen_width  as f32) * MAX_X,
+		(size[1] as f32 / screen_height as f32) * MAX_Y,
+	};
+}
+
+iv2_with_dpr :: fn(p: iv2, dpr: f32) -> iv2 {
+	return .{cast(int, r.round_px(cast(f32, p[0]) * dpr)), cast(int, r.round_px(cast(f32, p[1]) * dpr))};
+}
+
+bounds_with_dpr :: fn(b: Bounds, dpr: f32) -> Bounds {
+	return .{
+		iv2_with_dpr(b.pos, dpr),
+		iv2_with_dpr(b.size, dpr),
+	};
+}
+
+execute_ui_commands :: fn(rend: *r.Renderer, cmds: []DrawCommand) {
+	dpr := w.get_dpr();
+
+	savew := screen_width;
+	saveh := screen_height;
+	defer screen_width = savew;
+	defer screen_height = saveh;
+
+	wdpr := math.ceil(screen_width as f32 * dpr) as int;
+	hdpr := math.ceil(screen_height as f32 * dpr) as int;
+	screen_width = wdpr;
+	screen_height = hdpr;
+
+	r.set_depth_test(false);
+	for cmd in cmds {
+		switch cmd.tag {
+			case .ClipRect: {
+				b := bounds_with_dpr(cmd.clip.bounds, dpr);
+				b.pos[1] = screen_height - (b.pos[1] + b.size[1]);
+				/*
+				r.glScissor(
+					b.pos[0]  as i32,
+					b.pos[1]  as i32 - 6,
+					b.size[0] as i32,
+					b.size[1] as i32 + 6
+				);
+				*/
+				
+			}
+			case .DrawBox: {
+				r.set_shader(rend, .Box);
+
+				box := cmd.box;
+				bounds := bounds_with_dpr(box.bound, dpr);
+				r.set_shader(rend, .Box);
+				r.set_uniform(rend.shader, "Color", box.color);
+				r.set_uniform(rend.shader, "BoxSize", iv2_to_v2(bounds.size));
+				r.set_uniform(rend.shader, "TopRound", box.top_radius as f32 * dpr);
+				r.set_uniform(rend.shader, "BotRound", box.bot_radius as f32 * dpr);
+				r.set_uniform(rend.shader, "DarkenT", box.darken_eff);
+				pos := px_size_to_screen(bounds.pos);
+				size := px_size_to_screen(bounds.size);
+				pos[1] = MAX_Y - (pos[1] + size[1]);
+				r.draw_quad(rend, rend.white, pos, size, .{}, .{1, 1});
+			}
+			case .DrawTexture: {
+				r.set_shader(rend, .Box);
+
+				box := cmd.texture;
+				bounds := bounds_with_dpr(box.bound, dpr);
+				r.set_shader(rend, .Box);
+				r.set_uniform(rend.shader, "Color", v4 {1, 1, 1, 1});
+				r.set_uniform(rend.shader, "BoxSize", iv2_to_v2(bounds.size));
+				r.set_uniform(rend.shader, "TopRound", 0.0);
+				r.set_uniform(rend.shader, "BotRound", 0.0);
+				r.set_uniform(rend.shader, "DarkenT", 0.0);
+				pos := px_size_to_screen(bounds.pos);
+				size := px_size_to_screen(bounds.size);
+				pos[1] = MAX_Y - (pos[1] + size[1]);
+				r.draw_quad(rend, box.texture, pos, size, box.t00, box.t11);
+			}
+			case .DrawText: {
+				r.set_shader(rend, .Box);
+
+				txt := cmd.text;
+				sz := measure_text_px(txt.font, txt.text);
+
+				pos := txt.pos;
+				if txt.centered {
+					pos -= sz/.{2, 2};
+				}
+
+				pos = iv2_with_dpr(pos, dpr);
+				r.draw_text(rend, f, txt.text, pos, txt.col, dpr);
+			}
+			case .DrawLine: {
+				// @TODO:
+				line := cmd.line;
+
+				//height := px_size_to_screen(.{1, line.to[1] - line.from[1]})[1];
+
+				from := px_size_to_screen(iv2_with_dpr(line.from, dpr));
+				to := px_size_to_screen(iv2_with_dpr(line.to, dpr));
+
+				from[1] = MAX_Y - from[1];
+				to[1] = MAX_Y - to[1];
+
+				r.set_shader(rend, .Line);
+				r.set_uniform(rend.shader, "Color", line.color);
+
+				r.glLineWidth(line.width_px as f32 * dpr);
+				r.draw_line(rend, from, to);
+			}
+		};
+	}
+}
+
+/*
+
+    colors: struct {
+		bg_app            : v4,
+        bg_surface        : v4,
+        bg_surface_raised : v4,
+        bg_overlay        : v4,
+
+        text_primary      : v4,
+        text_secondary    : v4,
+        text_disabled     : v4,
+        text_on_accent    : v4,
+
+        accent            : v4,
+        accent_hover      : v4,
+        accent_pressed    : v4,
+        accent_disabled   : v4,
+
+        button_bg         : v4,
+        button_bg_hover   : v4,
+        button_bg_pressed : v4,
+        button_fg         : v4,
+
+        input_bg          : v4,
+        input_border      : v4,
+        input_border_focus: v4,
+        input_selection   : v4,
+        input_placeholder : v4,
+
+        border            : v4,
+        divider           : v4,
+
+        scrollbar         : v4,
+        scrollbar_track   : v4,
+
+        success           : v4,
+        warning           : v4,
+        error             : v4,
+        info              : v4,
+
+        surface_disabled  : v4,
+    },
+}
+*/
+
+set_jackbox_style :: fn() {
+	elem_color := RGB(31, 41, 55);
+
+	s := get_style(null);
+	s.colors.bg_app = darken(RGB(0x0a, 0x14, 0x20));
+	s.colors.bg_surface = RGB(0x0a, 0x14, 0x20);
+	s.colors.bg_surface_raised = RGB(0x0a, 0x14, 0x20);
+
+	s.colors.text_primary = RGB(245, 247, 247);
+
+	s.colors.accent = elem_color;
+	s.colors.accent_hover = lighten(elem_color);
+	s.colors.accent_pressed = RGB(0x25, 0x48, 0x68);
+	s.colors.accent_disabled = darken(elem_color);
+
+	s.colors.button_bg         = s.colors.accent;
+	s.colors.button_bg_hover   = s.colors.accent_hover;
+	s.colors.button_bg_pressed = s.colors.accent_pressed;
+	s.colors.button_fg         = s.colors.text_primary;
+
+	s.colors.input_bg          = s.colors.accent;
+	s.colors.input_border      = RGB(53, 63, 77);
+	s.colors.input_border_focus= s.colors.input_border;
+	s.colors.input_selection   = RGBA(53, 63, 77, 80);
+	s.colors.input_placeholder = RGB(0x8c, 0x93, 0x9c);
+}
+
