@@ -1,22 +1,40 @@
 module app;
 
 entry :: #import main;
-_ :: #import util;
 #import ui;
+#import perf;
+_ :: #import input;
+_ :: #import util;
 _ :: #import renderer;
+_ :: #import math;
+_ :: #import misc;
+
+
+LIGHTS_BINDING_POINT    :: 1 as uint;
+MATERIALS_BINDING_POINT :: 2 as uint;
+
 
 App :: struct {
 	rend: *Renderer,
 	font: *Font,
+	camera: Camera,
 	w: u32,
 	h: u32,
+	_3d: int,
+	cube_material: Material,
+	light_material: Material,
+	pixelate_material: Material,
+
+	lights_ubo: Uniformbuffer,
+
+	postproc: Framebuffer,
 }
 
 get_loadable_files_count :: fn() -> int #foreign #tag="wexport" {
 	return 0;
 }
 
-get_loadable_file :: fn(idx: int, isFetchPath: int) -> ?*u8 #foreign #tag="wexport" {
+get_loadable_file :: fn(int, int) -> ?*u8 #foreign #tag="wexport" {
 	return null;
 }
 
@@ -27,8 +45,82 @@ start :: fn(info: entry.EntryInfo) -> ?*App {
 	app.w = info.width;
 	app.h = info.height;
 
+
+	app.camera.position = v3 {0, 3.55, 2.25};
+	//app.camera.pitch = deg_to_rad(-40);
+	app.camera.speed = 0.01;
+	app.camera.yaw = deg_to_rad(-90);
+	app.camera.pitch = deg_to_rad(-40);
+
 	window := ui.panel_col();
 
+	vert := #embed_str "shaders/3d_demo.vert";
+	frag := #embed_str "shaders/3d_demo.frag";
+	obj := compile_shader_program(vert, frag);
+	if obj == 0 {
+		println("Failed to compile shader: %", obj);
+		return null;
+	}
+	app._3d = add_shader(app.rend, "3D", obj);
+
+	pix2dv := #embed_str "shaders/box.vert";
+	pix2df := #embed_str "shaders/pixelate.frag";
+	pobj := compile_shader_program(pix2dv, pix2df);
+	if pobj == 0 {
+		println("Failed to compile shader: %", pobj);
+		return null;
+	}
+
+	pixelate := add_shader(app.rend, "Pixelate", pobj);
+
+	app.lights_ubo = make_uniform_buffer(app.rend, LIGHTS_BINDING_POINT, size_of LightsUBO);
+	connect_shader_uniform_buffer(app.rend, app._3d, app.lights_ubo, c"Lights");
+
+	matubo := make_uniform_buffer(app.rend, MATERIALS_BINDING_POINT, size_of MaterialsUBO);
+	connect_shader_uniform_buffer(app.rend, app._3d, matubo, c"Material");
+
+	matubo_data := [1]MaterialsUBO{.{.{1, 1, 1}, 0.0, .{1, 1, 1}, 32.0}};
+	update_uniform_buffer(app.rend, matubo, make_u8(matubo_data[:]));
+
+	app.cube_material = make_material(app.rend, app._3d, .{}, matubo, app.rend.white);
+	app.light_material = make_material(app.rend, app._3d, .{}, matubo, app.rend.white);
+	app.pixelate_material = make_material(app.rend, pixelate, .{
+		UniformParam { type = .Vec2, name = "Pixels", u = .{ vec2 = .{256, 144} } },
+	}, .{}, 0);
+
+	lcolors: []v3 = .{.{0.2, 0.2, 0.6}, .{0.3, 0.3, 0.7}};
+	lights: [1]LightsUBO = .{ LightsUBO {
+		dir_light = .{
+			dir = .{-0.2, -1.0, -0.3},
+			ambient = .{0.05, 0.05, 0.1},
+			diffuse = .{0.2, 0.2, 0.7},
+			specular = .{0.7, 0.7, 0.7},
+		},
+		point_lights = .{
+			PointLightUBO {
+				position = .{-1, 2, 0.5}, constant = 1.0, linear = 0.09, quadratic = 0.032,
+				ambient = lcolors[0] * v3{0.1, 0.1, 0.1},
+				diffuse = lcolors[0],
+				specular = lcolors[0],
+			},
+			PointLightUBO {
+				position = .{0.25, 1.5, -3}, constant = 1.0, linear = 0.09, quadratic = 0.032,
+				ambient = lcolors[1] * v3{0.1, 0.1, 0.1},
+				diffuse = lcolors[1],
+				specular = lcolors[1],
+			},
+
+			PointLightUBO { constant = 1.0 },
+			PointLightUBO { constant = 1.0 },
+			PointLightUBO { constant = 1.0 },
+			PointLightUBO { constant = 1.0 },
+			PointLightUBO { constant = 1.0 },
+			PointLightUBO { constant = 1.0 },
+		},
+	}};
+	update_uniform_buffer(app.rend, app.lights_ubo, make_u8(lights[:]));
+
+	app.postproc = make_framebuffer(app.rend, app.w as i32, app.h as i32) or { return null; };
 
 	ui.set_top_widget(window);
 	ui.config_window_size(app.font, app.w as int, app.h as int);
@@ -40,6 +132,78 @@ on_resize :: fn(app: *App, w: u32, h: u32) {
 	app.h = h;
 }
 
+@profile=perf.measure_fn
 update :: fn(app: *App, dt: f32) {
+	move_camera(app, dt);
+
+	start_frame(app.rend, .{0, 0.5, 0.5, 1});
+	fb := get_screen_framebuffer(app.rend);
+
+	passes: []Pass = .{
+		Pass {
+			filter = _ -> true,
+			framebuffer = app.postproc,
+			clear = true,
+		},
+		Pass {
+			is_fullscreen = true,
+			full_screen_material = app.pixelate_material,
+			framebuffer = fb,
+			fullscreen_src = framebuffer_get_color(app.postproc),
+		}
+	};
+	model := calc_model(.{0, 0, -2}, .{1, 1, 1}, quat_from_to_rotation(.{0, 0, 1}, .{0.5, 0, 0.5}));
+	other_model := calc_model(.{0, 0, 2}, .{1, 1, 1}, quat_identity());
+
+	scene: Scene = .{
+		camera = &app.camera,
+		items = .{
+			DrawItem {
+				material = app.cube_material,
+				mesh = app.rend.cube,
+				model = model,
+				flags = 0,
+			},
+			DrawItem {
+				material = app.cube_material,
+				mesh = app.rend.cube,
+				model = other_model,
+				flags = 0,
+			},
+		},
+	};
+	draw_scene(app.rend, passes, scene, app.lights_ubo);
+	//perf.plot_data();
+}
+
+move_camera :: fn(app: *App, dt: f32) {
+
+	if mouse_down {
+		if mouse_delta_x > EPSILON || mouse_delta_x < -EPSILON
+			app.camera.yaw += 300 * mouse_delta_x / cast(f32, app.rend.width) * dt;
+		if mouse_delta_y > EPSILON || mouse_delta_y < -EPSILON
+			app.camera.pitch += 300 * -mouse_delta_y / cast(f32, app.rend.height) * dt;
+		app.camera.pitch = clamp(app.camera.pitch, -PI/3.0, PI/3.0);
+	}
+
+	dt *= 2;
+	if is_key_down(.KEY_W) {
+		app.camera.position = v3_add(app.camera.position, v3_scale(app.camera.front, dt));
+	}
+	if is_key_down(.KEY_S) {
+		app.camera.position = v3_add(app.camera.position, v3_scale(app.camera.front, -dt));
+	}
+	if is_key_down(.KEY_A) {
+		app.camera.position = v3_add(app.camera.position, v3_scale(app.camera.right, -dt));
+	}
+	if is_key_down(.KEY_D) {
+		app.camera.position = v3_add(app.camera.position, v3_scale(app.camera.right, dt));
+	}
+	if is_key_down(.SPACE) {
+		app.camera.position = v3_add(app.camera.position, .{0, dt, 0});
+	}
+	if is_key_down(.SHIFT) {
+		app.camera.position = v3_add(app.camera.position, .{0, -dt, 0});
+	}
 }
 

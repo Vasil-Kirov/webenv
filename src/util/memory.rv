@@ -20,6 +20,20 @@ mheap_start: uint = 0;
 mheap_at: uint = 0;
 
 
+heap_alloc :: fn(size: int, *mem.Allocator) -> ?*void {
+	return malloc(size as u32);
+}
+
+heap_free :: fn(p: ?*void, *mem.Allocator) {
+	free(p);
+}
+
+heap: mem.Allocator = .{
+	alloc = heap_alloc,
+	free  = heap_free,
+	data  = null,
+};
+
 MemoryArena :: struct {
 	start: *u8,
 	at: *u8,

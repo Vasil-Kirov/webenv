@@ -143,39 +143,35 @@ execute_ui_commands :: fn(rend: *r.Renderer, cmds: []DrawCommand) {
 				
 			}
 			case .DrawBox: {
-				r.set_shader(rend, .Box);
-
 				box := cmd.box;
 				bounds := bounds_with_dpr(box.bound, dpr);
-				r.set_shader(rend, .Box);
-				r.set_uniform(rend.shader, "Color", box.color);
-				r.set_uniform(rend.shader, "BoxSize", iv2_to_v2(bounds.size));
-				r.set_uniform(rend.shader, "TopRound", box.top_radius as f32 * dpr);
-				r.set_uniform(rend.shader, "BotRound", box.bot_radius as f32 * dpr);
-				r.set_uniform(rend.shader, "DarkenT", box.darken_eff);
+				r.set_shader(rend, "Box");
+				r.rset_uniform(rend.shader, "Color", box.color);
+				r.rset_uniform(rend.shader, "BoxSize", iv2_to_v2(bounds.size));
+				r.rset_uniform(rend.shader, "TopRound", box.top_radius as f32 * dpr);
+				r.rset_uniform(rend.shader, "BotRound", box.bot_radius as f32 * dpr);
+				r.rset_uniform(rend.shader, "DarkenT", box.darken_eff);
 				pos := px_size_to_screen(bounds.pos);
 				size := px_size_to_screen(bounds.size);
 				pos[1] = MAX_Y - (pos[1] + size[1]);
 				r.draw_quad(rend, rend.white, pos, size, .{}, .{1, 1});
 			}
 			case .DrawTexture: {
-				r.set_shader(rend, .Box);
-
 				box := cmd.texture;
 				bounds := bounds_with_dpr(box.bound, dpr);
-				r.set_shader(rend, .Box);
-				r.set_uniform(rend.shader, "Color", v4 {1, 1, 1, 1});
-				r.set_uniform(rend.shader, "BoxSize", iv2_to_v2(bounds.size));
-				r.set_uniform(rend.shader, "TopRound", 0.0);
-				r.set_uniform(rend.shader, "BotRound", 0.0);
-				r.set_uniform(rend.shader, "DarkenT", 0.0);
+				r.set_shader(rend, "Box");
+				r.rset_uniform(rend.shader, "Color", v4 {1, 1, 1, 1});
+				r.rset_uniform(rend.shader, "BoxSize", iv2_to_v2(bounds.size));
+				r.rset_uniform(rend.shader, "TopRound", 0.0);
+				r.rset_uniform(rend.shader, "BotRound", 0.0);
+				r.rset_uniform(rend.shader, "DarkenT", 0.0);
 				pos := px_size_to_screen(bounds.pos);
 				size := px_size_to_screen(bounds.size);
 				pos[1] = MAX_Y - (pos[1] + size[1]);
 				r.draw_quad(rend, box.texture, pos, size, box.t00, box.t11);
 			}
 			case .DrawText: {
-				r.set_shader(rend, .Box);
+				r.set_shader(rend, "Box");
 
 				txt := cmd.text;
 				sz := measure_text_px(txt.font, txt.text);
@@ -200,8 +196,8 @@ execute_ui_commands :: fn(rend: *r.Renderer, cmds: []DrawCommand) {
 				from[1] = MAX_Y - from[1];
 				to[1] = MAX_Y - to[1];
 
-				r.set_shader(rend, .Line);
-				r.set_uniform(rend.shader, "Color", line.color);
+				r.set_shader(rend, "Line");
+				r.rset_uniform(rend.shader, "Color", line.color);
 
 				r.glLineWidth(line.width_px as f32 * dpr);
 				r.draw_line(rend, from, to);

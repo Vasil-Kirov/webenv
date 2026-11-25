@@ -2,12 +2,15 @@ module main;
 
 #import app;
 
+_ :: #import misc;
 _ :: #import math;
 _ :: #import input;
 _ :: #import ui;
 _ :: #import util;
 _ :: #import renderer;
 _ :: #import wasm;
+#import mem;
+#import perf;
 #import xorrand;
 
 EntryInfo :: struct {
@@ -18,6 +21,7 @@ EntryInfo :: struct {
 	asset_manager: AssetManager,
 }
 
+font: *Font;
 rend: Renderer;
 memory_arena: MemoryArena;
 
@@ -34,11 +38,14 @@ entry :: fn(js_width: f32, js_height: f32) -> ?* #foreign #tag="wexport" {
 
 	width := js_width as u32;
 	height := js_height as u32;
-	rend, ok := make_renderer(width, height);
+	ok: bool;
+	rend, ok = make_renderer(width, height);
 	if !ok return null;
 
-	font := load_font(c"28px 'Times New Roman'", 28);
+	font = load_font(c"28px 'Times New Roman'", 28);
 	asset_manager := create_asset_manager();
+
+	config_window_size(font, width as int, height as int);
 
 	info: EntryInfo = .{
 		rend = &rend,
@@ -47,20 +54,25 @@ entry :: fn(js_width: f32, js_height: f32) -> ?* #foreign #tag="wexport" {
 		font = font,
 		asset_manager = asset_manager,
 	};
-	r := app.start(info);
-
-
-	return r;
+	return app.start(info);
 }
 
 on_resize :: fn(user_ptr: *void, w: f32, h: f32) #foreign #tag="wexport" {
 	resize_screen(&rend, w as u32, h as u32);
 	resize_canvas(w as u32, h as u32);
+
 	app.on_resize(user_ptr, w as u32, h as u32);
+	config_window_size(font, w as int, h as int);
 }
 
 update :: fn(user_ptr: *void, dt: f32) #foreign #tag="wexport" {
 	app.update(user_ptr, dt);
+
+	reset_arena(temp_arena);
+	//glWebClearUniformBuffer();
+	input_reset();
+	mem.reset_arena(mem.get_temp());
+	perf.next_frame();
 }
 
 

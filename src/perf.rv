@@ -1,0 +1,101 @@
+module perf;
+
+#import wasm;
+#import mem;
+#import str;
+_ :: #import misc;
+#import math;
+
+TRACKED_FRAMES :: 8;
+TrackData :: struct {
+	frames: [TRACKED_FRAMES]u64,
+	last_frame: int,
+	calls_this_frame: int,
+	name: string,
+}
+
+MAX_TRACKED_FNS :: 32;
+tracked_fns: [MAX_TRACKED_FNS]TrackData;
+tracked_fns_count: int;
+
+measure_fn :: fn(fn_name: string, cycles_taken: u64) {
+	for &tracked_fn in tracked_fns[:tracked_fns_count] {
+		if tracked_fn.name == fn_name {
+			tracked_fn.calls_this_frame++;
+			tracked_fn.frames[tracked_fn.last_frame] += cycles_taken;
+			return;
+		}
+	}
+	if tracked_fns_count < MAX_TRACKED_FNS {
+		tracked_fns[tracked_fns_count++] = .{
+			frames = .{cycles_taken},
+			last_frame = if TRACKED_FRAMES < 2 then 0 else 1,
+			name = fn_name,
+		};
+	}
+}
+
+frame_average :: fn(data: TrackData) -> u64 {
+	sum: u64 = 0;
+	for frame in data.frames {
+		sum += frame;
+	}
+	return sum / TRACKED_FRAMES as u64;
+}
+
+plot_data :: fn() {
+	max_cycles: u64 = 0;
+	for fn_ in tracked_fns[:tracked_fns_count] {
+		avg := frame_average(fn_);
+		max_cycles = max(max_cycles, avg);
+	}
+
+	b := str.create_builder(&mem.temp_alloc);
+	str.builder_pad_align(&b, 0, 51, '-');
+	str.builder_append_u8(&b, '\n');
+	for fn_ in tracked_fns[:tracked_fns_count] {
+		line_start := str.builder_char_len(&b);
+
+		str.builder_append(&b, "|");
+		PER_ROW_MAX :: 10.0 as f64;
+		avg := frame_average(fn_);
+		factor := min(avg as f64 / max_cycles as f64, 1.0);
+
+		n := math.ceil(cast(f32, PER_ROW_MAX * factor)) as int;
+		for _ in n {
+			str.builder_append(&b, "■");
+		}
+
+		for i := n; i < PER_ROW_MAX as int; ++i {
+			str.builder_append(&b, "□");
+		}
+		str.builder_append(&b, " - ");
+		str.builder_append(&b, fn_.name);
+
+		str.builder_pad_align(&b, line_start, 40);
+
+		str.format_float(f64, &b, wasm.cycles_to_ms(avg), 100);
+		str.builder_append(&b, "ms");
+
+		str.builder_pad_align(&b, line_start, 50);
+		str.builder_append(&b, " called ");
+		str.format_int(&b, fn_.calls_this_frame);
+
+		str.builder_pad_align(&b, line_start, 65);
+
+		str.builder_append(&b, "|\n");
+	}
+	str.builder_pad_align(&b, str.builder_char_len(&b), 51, '-');
+	str.builder_append_u8(&b, '\n');
+	s := str.from_builder(&b, &mem.temp_alloc);
+	println("%", s);
+}
+
+next_frame :: fn() {
+	for &tracked_fn in tracked_fns[:tracked_fns_count] {
+		tracked_fn.last_frame = (tracked_fn.last_frame + 1) % TRACKED_FRAMES;
+		tracked_fn.frames[tracked_fn.last_frame] = 0;
+		tracked_fn.calls_this_frame = 0;
+	}
+}
+

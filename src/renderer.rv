@@ -1,389 +1,193 @@
 module renderer;
 
-#import wasm;
-_ :: #import math;
+#import perf;
+#import array;
+#import mem;
+#import io;
 _ :: #import util;
+_ :: #import math;
+_ :: #import "collections.rv";
+
+MaterialsUBO :: struct #pack {
+	diffuse: v3, pad: f32,
+	specular: v3, shininess: f32,
+}
+
+DirLightUBO :: struct #pack {
+	dir: v3, pad0: f32,
+	ambient: v3, pad1: f32,
+	diffuse: v3, pad2: f32,
+	specular: v3, pad3: f32,
+}
+
+PointLightUBO :: struct #pack {
+	position: v3, constant: f32,
+	linear: f32,  quadratic: f32, pad0: f32, pad1: f32,
+	ambient: v3,  pad2: f32,
+	diffuse: v3,  pad3: f32,
+	specular: v3, pad4: f32,
+}
+LightsUBO :: struct #pack { 
+	dir_light: DirLightUBO,
+	point_lights: [8]PointLightUBO,
+}
+
+UniformParamType :: enum {
+	I32,
+	F32,
+	Vec2,
+	Vec3,
+	Vec4,
+	Mat4,
+}
+
+UniformParam :: struct {
+	type: UniformParamType,
+	name: string,
+	u: union {
+		i32: i32,
+		f32: f32,
+		vec2: v2,
+		vec3: v3,
+		vec4: v4,
+		mat4: M4,
+	}
+}
+
+Material :: struct {
+	shader: int,
+	material_ubo: Uniformbuffer,
+	uniforms: []UniformParam,
+	tex: GPUTexture,
+	id: int,
+}
+
+DrawItem :: struct {
+	material: Material,
+	mesh: Mesh,
+	model: M4,
+	flags: u32,
+}
+
+Pass :: struct {
+	filter: ?*fn(item: DrawItem) -> bool,
+	framebuffer: Framebuffer,
+	clear: bool,
+
+	is_fullscreen: bool,
+	full_screen_material: Material,
+	fullscreen_src: GPUTexture,
+}
+
+Light :: struct {
+	position: v3,
+	
+	constant: f32,
+	linear: f32,
+	quadratic: f32,
+
+	ambient: v3,
+	diffuse: v3,
+	specular: v3,
+}
+
+DirLight :: struct {
+	dir: v3,
+
+	ambient: v3,
+	diffuse: v3,
+	specular: v3,
+}
+
+Scene :: struct {
+	camera: *Camera,
+	items: []DrawItem,
+}
+
+Batch :: struct {
+	items: []DrawItem,
+	models: []M4,
+	material: Material,
+	mesh: Mesh,
+}
+
+make_material :: fn(r: *Renderer, shader: int, uniforms: []UniformParam, matubo: Uniformbuffer, tex: GPUTexture) -> Material {
+	duped_uniforms, ok := mem.dupe(uniforms, &heap);
+	#assert ok;
+	return Material {
+		shader = shader,
+		uniforms = duped_uniforms,
+		material_ubo = matubo,
+		tex = tex,
+		id = r.material_id++,
+	};
+}
+
+
+@profile=perf.measure_fn
+batch_group_items :: fn(items: *[]DrawItem) -> []Batch {
+	batches := array.create(Batch, mem.get_temp());
+	for len(*items) != 0 {
+		first := (*items)[0];
+
+		batch: Batch;
+		batch.items = array.create(DrawItem, mem.get_temp());
+		batch.models = array.create(M4, mem.get_temp());
+		batch.material = first.material;
+		batch.mesh = first.mesh;
+
+		array.add(&batch.models, first.model);
+		array.pop(items, 0);
+		array.add(&batch.items, first);
+		for i := 0; i < len(*items); ++i {
+			item := (*items)[i];
+			if item.material.id == batch.material.id && item.mesh.id == batch.mesh.id {
+				array.pop(items, i);
+				array.add(&batch.items, item);
+				array.add(&batch.models, item.model);
+			}
+		}
+		array.add(&batches, batch);
+	}
+	return batches;
+}
+
+@profile=perf.measure_fn
+draw_scene :: fn(r: *Renderer, passes: []Pass, scene: Scene, lights_ubo: Uniformbuffer) {
+	persp, view := calc_vp(r, scene.camera);
+	bind_uniform_buffer(lights_ubo);
+	set_vp(r, persp, view);
+
+	for pass in passes {
+		set_framebuffer(r, pass.framebuffer);
+		if pass.clear {
+			clear_framebuffer(r);
+		}
+
+		if pass.is_fullscreen {
+			set_depth_test(false);
+			bind_and_draw_fullscreen(r, pass.full_screen_material, pass.fullscreen_src);
+			continue;
+		}
+
+		pass_filter := pass.filter;
+		items := scene.items;
+		if pass_filter
+			items = filter(scene.items, pass_filter, mem.get_temp());
+		if len(items) == 0
+			continue;
+
+		set_depth_test(true);
+		batches := batch_group_items(&items);
+		for batch in batches {
+			upload_instanced_data(r, batch.models);
+			bind_batch(r, batch);
+			pos := resolve_uniform(r.shader, "ViewPos") or { return; };
+			set_uniform(pos, scene.camera.position);
+
+			draw_instanced(r, batch.mesh.idx_count, len(batch.items));
+		}
+	}
+}
 _ :: #import misc;
 
-//            SCREEN SPACE
-/* (0, 5.625) ----------------- (10, 5.625)
- *            |               |
- *            |               |
- *            |               |
- *            |               |
- * (0, 0)     ----------------- (10, 0)
- */
-
-Filter :: enum {
-	Nearest,
-	Linear,
-}
-
-SHADER_COUNT :: 2;
-Shader :: enum {
-	Box,
-	Line,
-}
-
-Renderer :: struct {
-	white: GPUTexture,
-	vao: GPUBuffer,
-	vbo: GPUBuffer,
-	ebo: GPUBuffer,
-	shader: u32,
-	width: u32,
-	height: u32,
-	shaders: [SHADER_COUNT]u32,
-};
-
-make_renderer :: fn(w: u32, h: u32) -> (Renderer, bool) {
-	//glEnable(GL_DEPTH_TEST);  
-	glEnable(GL_CULL_FACE);
-	glEnable(GL_BLEND);
-	//glEnable(GL_SCISSOR_TEST);
-	//glCullFace(GL_BACK);
-	//glFrontFace(GL_CCW);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-	r: Renderer;
-	using r;
-	shader = -1;
-	vao = glCreateVertexArray();
-	vbo = glCreateBuffer();
-	ebo = glCreateBuffer();
-	
-	VERT_2D :: #embed_str "shaders/box.vert";
-	BOX_2D :: #embed_str "shaders/box.frag";
-	LINE_VERT :: #embed_str "shaders/line.vert";
-	LINE_FRAG :: #embed_str "shaders/line.frag";
-	shaders[Shader.Box as int]  = compile_shader_program(VERT_2D, BOX_2D);
-	shaders[Shader.Line as int] = compile_shader_program(LINE_VERT, LINE_FRAG);
-	for it in shaders {
-		if it == 0
-			return .{}, false;
-	}
-	set_shader(&r, Shader.Box);
-
-	white_data: u32 = 0xFFFFFFFF;
-	white = create_texture((&white_data) as *u8, 1, 1, .Nearest);
-
-	resize_screen(&r, w, h);
-
-	return r, true;
-}
-
-set_depth_test :: fn(b: bool) {
-	if b
-		glEnable(GL_DEPTH_TEST);
-	else
-		glDisable(GL_DEPTH_TEST);
-}
-
-set_shader :: fn(r: *Renderer, shader: Shader) {
-	if r.shader != r.shaders[shader as int] {
-		r.shader = r.shaders[shader as int];
-		glUseProgram(r.shader);
-	}
-}
-
-resize_screen :: fn(r: *Renderer, w: u32, h: u32) {
-	r.width = w;
-	r.height = h;
-	wasm.resize_canvas(w, h);
-}
-
-upload_texture :: fn(pixels: *u8, width: u32, height: u32, filter: Filter, tex: GPUTexture) {
-	glBindTexture(GL_TEXTURE_2D, tex);
-
-	fl_min := GL_LINEAR_MIPMAP_LINEAR;
-	fl_mag := GL_LINEAR;
-	if filter == .Nearest {
-		fl_min = GL_NEAREST_MIPMAP_NEAREST;
-		fl_mag = GL_NEAREST;
-	}
-
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);	
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, fl_min);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, fl_mag);
-
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width as i32, height as i32, 0, GL_RGBA as u32, GL_UNSIGNED_BYTE, pixels);
-	glGenerateMipmap(GL_TEXTURE_2D);
-}
-
-create_texture :: fn(pixels: *u8, width: u32, height: u32, filter: Filter) -> GPUTexture {
-	tex := glCreateTexture();
-	upload_texture(pixels, width, height, filter, tex);
-
-	return tex;
-}
-
-
-compile_shader_program :: fn(vs_src: string, fs_src: string) -> u32 {
-	vs := glCreateShader(GL_VERTEX_SHADER);
-	fs := glCreateShader(GL_FRAGMENT_SHADER);
-	vdata := vs_src.data;
-	fdata := fs_src.data;
-	glWebShaderSource(vs, vdata as *i8);
-	glWebShaderSource(fs, fdata as *i8);
-	glCompileShader(vs);
-	glCompileShader(fs);
-
-	success: u32;
-	buf: [512]i8;
-	success = glWebGetShaderCompileStatus(vs);
-	if(!success)
-	{
-		glGetShaderInfoLog(vs, 512, null, &buf[0]);
-		p := (&buf[0]) as *u8;
-		println("Vertex shader failed to compile!: %s", p);
-		return 0;
-	}
-
-	success = glWebGetShaderCompileStatus(fs);
-	if(!success)
-	{
-		glGetShaderInfoLog(fs, 512, null, &buf[0]);
-		p := (&buf[0]) as *u8;
-		println("Fragment shader failed to compile!: %s", p);
-		return 0;
-	}
-
-	program := glCreateProgram();
-	glAttachShader(program, vs);
-	glAttachShader(program, fs);
-	glLinkProgram(program);
-
-	success = glWebGetProgramLinkStatus(program);
-	if(!success)
-	{
-		glGetProgramInfoLog(program, 512, null, &buf[0]);
-		p := (&buf[0]) as *u8;
-		println("Shader failed to link!: %s", p);
-		return 0;
-	}
-
-	glDeleteShader(vs);
-	glDeleteShader(fs);
-
-	return program;
-}
-
-ext_v2 :: fn(v: v2) -> v3 {
-	return v3 { v[0], v[1], 0 };
-}
-
-v2_tex :: fn(v: v2) -> [2]f32 {
-	return .{v[0], v[1]};
-}
-
-draw_line :: fn(r: *Renderer, from: v2, to: v2) {
-	glfrom := pos_to_gl(from);
-	glto := pos_to_gl(to);
-
-	data := [4]f32{glfrom[0], glfrom[1], glto[0], glto[1]};
-
-	glBindVertexArray(r.vao);
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, r.white);
-	set_uniform(r.shader, "Tex", 0 as i32);
-
-	glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
-	glBufferData(GL_ARRAY_BUFFER, size_of data, &data[0], GL_DYNAMIC_DRAW);
-
-	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE as u8, 2 * size_of(f32) as i32, null);
-	glEnableVertexAttribArray(0);
-
-	glDrawArrays(GL_LINES, 0, 2);
-}
-
-draw_quad :: fn(r: *Renderer, tex: u32, pos: v2, sz: v2, t_from: v2, t_to: v2) {
-	glpos := pos_to_gl(pos);
-	glsz := size_to_gl(sz);
-
-	verts: [4]Vert = .{
-		.{ext_v2(glpos), v2_tex(t_from)},
-		.{ext_v2(glpos + v2 {glsz[0], 0}), .{t_to[0], t_from[1]}},
-		.{ext_v2(glpos + glsz), v2_tex(t_to)},
-		.{ext_v2(glpos + v2 {0, glsz[1]}), .{t_from[0], t_to[1]}}
-	};
-	draw_quad_ex(r, tex, verts);
-}
-
-gl_draw_verts :: fn(r: *Renderer, tex: u32, shader: Shader, verts: []Vert, indices: []u32) {
-	_ := shader;
-	verts := verts;
-	indices := indices;
-
-
-	glBindVertexArray(r.vao);
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, tex);
-	set_uniform(r.shader, "Tex", 0 as i32);
-
-	glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
-	glBufferData(GL_ARRAY_BUFFER, size_of(Vert) * verts.count, &verts[0], GL_DYNAMIC_DRAW);
-
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r.ebo);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, size_of(i32) * indices.count, &indices[0], GL_DYNAMIC_DRAW);
-
-	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE as u8, size_of(Vert) as i32, null);
-	glEnableVertexAttribArray(0);
-
-	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE as u8, size_of(Vert) as i32, cast(*void, size_of(v3)));
-	glEnableVertexAttribArray(1);
-
-	glDrawElements(GL_TRIANGLES, indices.count as i32, GL_UNSIGNED_INT, null);
-}
-
-draw_quad_ex :: fn(r: *Renderer, texture: u32, verts: [4]Vert) {
-	verts := verts;
-	glBindVertexArray(r.vao);
-
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, texture);
-	set_uniform(r.shader, "Tex", 0 as i32);
-
-	indices: []u32 = .{
-		0, 1, 2, 0, 2, 3
-	};
-	v := []Vert{verts[0], verts[1], verts[2], verts[3]};
-	gl_draw_verts(r, texture, .Box, v, indices);
-}
-
-start_frame :: fn(r: *Renderer)  {
-	v := v4{0.396, 0.067, 0.031, 1.0};
-	v = v * v4{0.65, 0.65, 0.65, 0.65};
-
-	v[3] = 1.0;
-	glClearColor(v[0], v[1], v[2], v[3]);
-	glClear(GL_COLOR_BUFFER_BIT);
-	glClear(GL_DEPTH_BUFFER_BIT);
-
-	glUseProgram(r.shader);
-}
-
-draw_mesh :: fn(r: *Renderer, m: Mesh, texture: GPUTexture) {
-	glBindVertexArray(r.vao);
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, texture);
-	set_uniform(r.shader, "Tex", 0 as i32);
-	glBindBuffer(GL_ARRAY_BUFFER, m.verts);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m.indices);
-
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE as u8, size_of(Vert) as i32, null);
-	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE as u8, size_of(Vert) as i32, cast(*void, size_of(v3)));
-	glEnableVertexAttribArray(1);
-
-	glDrawElements(GL_TRIANGLES, m.idx_count as i32, GL_UNSIGNED_INT, null);
-}
-
-pos_to_gl :: fn(pos: v2) -> v2 #inline {
-	return v2 {lerp(-1, 1, pos[0] / MAX_X), lerp(-1, 1, pos[1] / MAX_Y)};
-}
-
-size_to_gl :: fn(size: v2) -> v2 #inline {
-	return v2 {size[0] / (MAX_X / 2), size[1] / (MAX_Y / 2)};
-}
-
-lerp :: fn(a: f32, b: f32, t: f32) -> f32 #inline {
-	return a + (b - a) * t;
-}
-
-calc_model :: fn(translate_xyz: v3, scale_xyz: v3, rotation_q: Quat) -> M4 #inline {
-	rotation := quat_to_m4(rotation_q);
-	translate_m := translate(translate_xyz);
-	scale_m := scale(scale_xyz);
-	return mat4_mult(translate_m, mat4_mult(rotation, scale_m));
-}
-
-set_model :: fn(r: *Renderer, translate_xyz: v3, scale_xyz: v3, rotation_q: Quat) #inline {
-	model := calc_model(translate_xyz, scale_xyz, rotation_q);
-	set_uniform(r.shader, "Model", model);
-}
-
-set_vp :: fn(r: *Renderer, camera: *Camera) {
-	//rotation := mat4_mult(rotate_z, mat4_mult(rotate_y, rotate_x));
-	view := calc_view(camera);
-	persp := perspective(r.width as f32 / r.height as f32, FOV);
-
-	set_uniform(r.shader, "View", view);
-	set_uniform(r.shader, "Projection", persp);
-}
-
-set_uniform :: fn(shader: u32, name: string, v: $T) {
-	v := v;
-	#run {
-		allowed :: []type{M4, v2, v3, v4, i32, f32};
-		T := type_of v;
-		found := false;
-		for it in allowed {
-			if T == it found = true;
-		}
-		if !found {
-			s := "Unknown type passed in set_uniform";
-			raise_error_(&s, #file_location);
-		}
-	};
-
-	location := glGetUniformLocation(shader, name.data as *i8);
-	if T == v2 {
-		p := *cast(*v2, &v);
-		glUniform2f(location, p[0], p[1]);
-	}
-	if T == v3 {
-		p := *cast(*v3, &v);
-		glUniform3f(location, p[0], p[1], p[2]);
-	}
-	if T == v4 {
-		p := *cast(*v4, &v);
-		glUniform4f(location, p[0], p[1], p[2], p[3]);
-	}
-	if T == i32 {
-		i := *cast(*i32, &v);
-		glUniform1i(location, i);
-	}
-	if T == f32 {
-		i := *cast(*f32, &v);
-		glUniform1f(location, i);
-	}
-}
-
-upload_vertex_buffer :: fn(data: []u8) -> GPUBuffer {
-	data := data;
-
-	buf := glCreateBuffer();
-	glBindBuffer(GL_ARRAY_BUFFER, buf);
-	glBufferData(GL_ARRAY_BUFFER, data.count, &data[0], GL_STATIC_DRAW);
-	return buf;
-}
-
-upload_index_buffer :: fn(data: []u8) -> GPUBuffer {
-	data := data;
-
-	buf := glCreateBuffer();
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buf);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, data.count, &data[0], GL_STATIC_DRAW);
-	return buf;
-}
-
-GPUBuffer :: u32;
-GPUTexture :: u32;
-
-MAX_X: f32 : 10;
-MAX_Y: f32 : 5.625;
-
-Vert :: struct {
-	pos: v3,
-	tex: [2]f32,
-}
-
-Mesh :: struct {
-	verts: GPUBuffer,
-	indices: GPUBuffer,
-	idx_count: i32,
-}
-
-#private
-raise_error_ :: fn(s: *string, location: FileLocation) #intrinsic;

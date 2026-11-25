@@ -39,6 +39,8 @@ GLboolean: type: u8;
 GLsizei: type: i32;
 GLubyte: type: khronos_uint8_t;
 
+glGetError :: fn() -> GLenum  #wasm_import="imports","glGetError";
+
 glClear :: fn(Mask: GLbitfield) #wasm_import="imports","glClear";
 glClearColor :: fn(r: GLfloat, g: GLfloat, b: GLfloat, a: GLfloat) #wasm_import="imports","glClearColor";
 
@@ -53,7 +55,7 @@ glCompileShader  :: fn(shader: GLuint) #wasm_import="imports","glCompileShader";
 glCreateProgram  :: fn() -> GLuint #wasm_import="imports","glCreateProgram";
 glCullFace  :: fn(mode: GLenum) #wasm_import="imports","glCullFace";
 glDeleteBuffers  :: fn(n: GLsizei, buffers: *GLuint) #wasm_import="imports","glDeleteBuffers";
-glDeleteFramebuffers  :: fn(n: GLsizei, framebuffers: *GLuint) #wasm_import="imports","glDeleteFramebuffers";
+glDeleteFramebuffer  :: fn(framebuffers: GLuint) #wasm_import="imports","glDeleteFramebuffer";
 glDeleteProgram  :: fn(program: GLuint) #wasm_import="imports","glDeleteProgram";
 glDeleteShader  :: fn(shader: GLuint) #wasm_import="imports","glDeleteShader";
 glDepthFunc  :: fn(func: GLenum) #wasm_import="imports","glDepthFunc";
@@ -64,6 +66,7 @@ glDisable  :: fn(cap: GLenum) #wasm_import="imports","glDisable";
 glDisableVertexAttribArray  :: fn(index: GLuint) #wasm_import="imports","glDisableVertexAttribArray";
 glDrawArrays  :: fn(mode: GLenum, first: GLint, count: GLsizei) #wasm_import="imports","glDrawArrays";
 glDrawElements  :: fn(mode: GLenum, count: GLsizei, type: GLenum, indices: ?*void) #wasm_import="imports","glDrawElements";
+glDrawElementsInstanced :: fn(mode: GLenum, count: GLsizei, type: GLenum, offset: GLintptr, instanceCount: GLsizei) #wasm_import="imports","glDrawElementsInstanced";
 glEnable  :: fn(cap: GLenum) #wasm_import="imports","glEnable";
 glBlendFunc :: fn(sfactor: GLenum, dfactor: GLenum) #wasm_import="imports","glBlendFunc";
 glEnableVertexAttribArray  :: fn(index: GLuint) #wasm_import="imports","glEnableVertexAttribArray";
@@ -72,9 +75,15 @@ glFlush  :: fn() #wasm_import="imports","glFlush";
 
 glCreateVertexArray  :: fn() -> u32 #wasm_import="imports","glCreateVertexArray";
 glCreateBuffer  :: fn() -> u32 #wasm_import="imports","glCreateBuffer";
+glCreateFramebuffer :: fn() -> u32 #wasm_import="imports","glCreateFramebuffer";
+glCreateRenderbuffer :: fn() -> u32 #wasm_import="imports","glCreateRenderbuffer";
+
 glCreateTexture  :: fn() -> u32 #wasm_import="imports","glCreateTexture";
 glDeleteTexture  :: fn(texture: GLuint) #wasm_import="imports","glDeleteTexture";
 
+glBindBufferBase :: fn(target: GLenum, index: GLuint, buffer: GLuint) #wasm_import="imports","glBindBufferBase";
+glGetUniformBlockIndex :: fn(program: GLuint, name: *GLchar) -> GLuint #wasm_import="imports","glGetUniformBlockIndex";
+glUniformBlockBinding :: fn(program: GLuint, uniformBlockIdx: GLuint, uniformBlockBinding: GLuint) #wasm_import="imports","glUniformBlockBinding";
 glGetUniformLocation  :: fn(program: GLuint, name: *GLchar) -> GLint #wasm_import="imports","glGetUniformLocation";
 glUniform1i  :: fn(location: GLint, v0: GLint) #wasm_import="imports","glUniform1i";
 glUniform1f  :: fn(location: GLint, v0: GLfloat) #wasm_import="imports","glUniform1f";
@@ -82,25 +91,38 @@ glUniform2f  :: fn(location: GLint, v0: GLfloat, v1: GLfloat) #wasm_import="impo
 glUniform3f  :: fn(location: GLint, v0: GLfloat, v1: GLfloat, v2: GLfloat) #wasm_import="imports","glUniform3f";
 glUniform4f  :: fn(location: GLint, v0: GLfloat, v1: GLfloat, v2: GLfloat, v3: GLfloat) #wasm_import="imports","glUniform4f";
 glUniformMatrix4fv :: fn(location: GLint, count: GLsizei, transpose: bool, value: *f32) #wasm_import="imports","glUniformMatrix4fv";
-glWebClearUniformBuffer :: fn() #wasm_import="imports","glWebClearUniformBuffer";
+//glWebClearUniformBuffer :: fn() #wasm_import="imports","glWebClearUniformBuffer";
 
 glActiveTexture  :: fn(texture: GLenum) #wasm_import="imports","glActiveTexture";
 glAttachShader  :: fn(program: GLuint, shader: GLuint) #wasm_import="imports","glAttachShader";
 //void glBindAttribLocation (GLuint program, GLuint index, const GLchar *name) WASM_IMPORT(glBindAttribLocation);
 glBindBuffer  :: fn(target: GLenum, buffer: GLuint) #wasm_import="imports","glBindBuffer";
+glBindFramebuffer :: fn(target: GLenum, fb: GLuint) #wasm_import="imports","glBindFramebuffer";
+glBindRenderbuffer :: fn(target: GLenum, rb: GLuint) #wasm_import="imports","glBindRenderbuffer";
 glBindVertexArray  :: fn(array: GLuint) #wasm_import="imports","glBindVertexArray";
 glBindTexture  :: fn(target: GLenum, texture: GLuint) #wasm_import="imports","glBindTexture";
 
-glBufferData  :: fn(target: GLenum, size: GLsizeiptr, data: *void, usage: GLenum) #wasm_import="imports","glBufferData";
-glBufferSubData  :: fn(target: GLenum, offset: GLintptr, size: GLsizeiptr, data: *void) #wasm_import="imports","glBufferSubData";
 
+glCheckFramebufferStatus :: fn(target: GLenum) -> GLenum #wasm_import="imports","glCheckFramebufferStatus";
+glFramebufferTexture2D :: fn(target: GLenum, attachment: GLenum, textarget: GLenum, texture: GLuint, level: GLint) #wasm_import="imports","glFramebufferTexture2D";
+glFramebufferRenderbuffer :: fn(target: GLenum, attachment: GLenum, rbtarget: GLenum, rb: GLuint) #wasm_import="imports","glFramebufferRenderbuffer";
 
-glTexImage2D  :: fn(target: GLenum, level: GLint, internalformat: GLint, width: GLsizei, height: GLsizei, border: GLint, format: GLenum, type: GLenum, pixels: *void) #wasm_import="imports","glTexImage2D";
+glRenderbufferStorage :: fn(target: GLenum, internalformat: GLenum, width: GLsizei, height: GLsizei) #wasm_import="imports","glRenderbufferStorage";
+
+glBufferData  :: fn(target: GLenum, size: GLsizeiptr, data: ?*void, usage: GLenum) #wasm_import="imports","glBufferData";
+glBufferSubData  :: fn(target: GLenum, offset: GLintptr, size: GLsizeiptr, data: ?*void) #wasm_import="imports","glBufferSubData";
+
+glGetBufferSubData :: fn(target: GLenum, offset: GLintptr, size: GLsizeiptr, data: *void) #wasm_import="imports","glGetBufferSubData";
+
+glGetBufferParameter :: fn(target: GLenum, pname: GLenum ) -> int #wasm_import="imports","glGetBufferParameter";
+
+glTexImage2D  :: fn(target: GLenum, level: GLint, internalformat: GLint, width: GLsizei, height: GLsizei, border: GLint, format: GLenum, type: GLenum, pixels: ?*void) #wasm_import="imports","glTexImage2D";
 
 glTexParameteri  :: fn(target: GLenum, pname: GLenum, param: GLint) #wasm_import="imports","glTexParameteri";
 glGenerateMipmap :: fn(target: GLenum) #wasm_import="imports","glGenerateMipmap";
 
 glVertexAttribPointer  :: fn(index: GLuint, size: GLint, type: GLenum, normalized: GLboolean, stride: GLsizei, pointer: ?*void) #wasm_import="imports","glVertexAttribPointer";
+glVertexAttribDivisor  :: fn(index: GLuint, divisor: GLuint) #wasm_import="imports","glVertexAttribDivisor";
 
 glWebGetShaderCompileStatus  :: fn(shader: GLuint) -> u32 #wasm_import="imports","glWebGetShaderCompileStatus";
 glWebGetProgramLinkStatus  :: fn(program: GLuint) -> u32 #wasm_import="imports","glWebGetProgramLinkStatus";
@@ -388,6 +410,7 @@ GL_RGB5_A1                            : GLenum :0x8057    ;
 GL_RGB565                             : GLenum :0x8D62    ;
 GL_DEPTH_COMPONENT16                  : GLenum :0x81A5    ;
 GL_STENCIL_INDEX8                     : GLenum :0x8D48    ;
+GL_DEPTH24_STENCIL8                   : GLenum :0x88F0    ;
 GL_RENDERBUFFER_WIDTH                 : GLenum :0x8D42    ;
 GL_RENDERBUFFER_HEIGHT                : GLenum :0x8D43    ;
 GL_RENDERBUFFER_INTERNAL_FORMAT       : GLenum :0x8D44    ;
@@ -409,8 +432,43 @@ GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS  : GLenum : 0x8CD9   ;
 GL_FRAMEBUFFER_UNSUPPORTED            : GLenum : 0x8CDD   ;
 GL_FRAMEBUFFER_BINDING                : GLenum : 0x8CA6   ;
 GL_RENDERBUFFER_BINDING               : GLenum : 0x8CA7   ;
+GL_DEPTH_STENCIL_ATTACHMENT           : GLenum : 0x821A   ;
 GL_MAX_RENDERBUFFER_SIZE              : GLenum : 0x84E8   ;
+GL_DEPTH_STENCIL                      : GLenum : 0x84F9   ;
 GL_INVALID_FRAMEBUFFER_OPERATION      : GLenum : 0x0506   ;
+GL_UNIFORM_BUFFER                 : GLenum : 0x8A11;
+GL_UNIFORM_BUFFER_BINDING         : GLenum : 0x8A28;
+GL_UNIFORM_BUFFER_START           : GLenum : 0x8A29;
+GL_UNIFORM_BUFFER_SIZE            : GLenum : 0x8A2A;
+GL_MAX_VERTEX_UNIFORM_BLOCKS      : GLenum : 0x8A2B;
+GL_MAX_GEOMETRY_UNIFORM_BLOCKS    : GLenum : 0x8A2C;
+GL_MAX_FRAGMENT_UNIFORM_BLOCKS    : GLenum : 0x8A2D;
+GL_MAX_COMBINED_UNIFORM_BLOCKS    : GLenum : 0x8A2E;
+GL_MAX_UNIFORM_BUFFER_BINDINGS    : GLenum : 0x8A2F;
+GL_MAX_UNIFORM_BLOCK_SIZE         : GLenum : 0x8A30;
+GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS : GLenum : 0x8A31;
+GL_MAX_COMBINED_GEOMETRY_UNIFORM_COMPONENTS :GLenum: 0x8A32;
+GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS :GLenum: 0x8A33;
+GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT :GLenum: 0x8A34;
+GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH  :GLenum: 0x8A35;
+GL_ACTIVE_UNIFORM_BLOCKS          : GLenum : 0x8A36;
+GL_UNIFORM_TYPE                   : GLenum : 0x8A37;
+GL_UNIFORM_SIZE                   : GLenum : 0x8A38;
+GL_UNIFORM_NAME_LENGTH            : GLenum : 0x8A39;
+GL_UNIFORM_BLOCK_INDEX            : GLenum : 0x8A3A;
+GL_UNIFORM_OFFSET                 : GLenum : 0x8A3B;
+GL_UNIFORM_ARRAY_STRIDE           : GLenum : 0x8A3C;
+GL_UNIFORM_MATRIX_STRIDE          : GLenum : 0x8A3D;
+GL_UNIFORM_IS_ROW_MAJOR           : GLenum : 0x8A3E;
+GL_UNIFORM_BLOCK_BINDING          : GLenum : 0x8A3F;
+GL_UNIFORM_BLOCK_DATA_SIZE        : GLenum : 0x8A40;
+GL_UNIFORM_BLOCK_NAME_LENGTH      : GLenum : 0x8A41;
+GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS  : GLenum : 0x8A42;
+GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES : GLenum : 0x8A43;
+GL_UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER : GLenum : 0x8A44;
+GL_UNIFORM_BLOCK_REFERENCED_BY_GEOMETRY_SHADER : GLenum : 0x8A45;
+GL_UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER : GLenum : 0x8A46;
+GL_INVALID_INDEX                  : GLenum : 0xFFFFFFFF;
 
 GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT : GLenum : 0x8CD7    ;
 GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL : GLenum : 0x8CD2         ;

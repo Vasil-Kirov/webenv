@@ -8,9 +8,18 @@ logs_floats :: fn(s: *u8, count: int, n1: f32, n2: f32) #wasm_import="imports","
 abort :: fn() #wasm_import="imports","wasm_abort";
 resize_canvas :: fn(w: u32, h: u32) #wasm_import="imports","resize_canvas";
 get_ms :: fn() -> f32 #wasm_import="imports","wasm_get_ms";
+get_ms_64 :: fn() -> f64 #wasm_import="imports","read_ms_f64";
 get_dpr :: fn() -> f32 #wasm_import="imports","get_dpr";
 open_virtual_keyboard :: fn(x: f32, y: f32, w: f32, h: f32) #wasm_import="imports","open_virtual_keyboard";
 close_virtual_keyboard :: fn() #wasm_import="imports","close_virtual_keyboard";
+
+cycles_to_ms :: fn(cycles: u64) -> f64 {
+	return cast(f64, cycles) / 1000000;
+}
+
+__internal_read_cycles :: fn() -> u64 #foreign {
+	return cast(u64, get_ms_64() * 1000000);
+}
 
 /*
 memcmp :: fn(p1: *u8, p2: *u8, n: uint) -> c_int #link="memcmp" #foreign {

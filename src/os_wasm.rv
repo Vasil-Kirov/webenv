@@ -22,15 +22,18 @@ MUTEX_INIT :: 0;
 
 #public
 read_env :: fn(name: string) -> string #nocheck {
+	_ := name;
 	return "";
 }
 
 lock_mutex :: fn(m: *Mutex) {
 	// @TODO:
+	_ := m;
 }
 
 unlock_mutex :: fn(m: *Mutex) {
 	// @TODO:
+	_ := m;
 }
 
 ThreadID :: u64;
@@ -38,33 +41,42 @@ ThreadRetType :: *void;
 
 
 create_thread :: fn(start: fn(*void) -> ThreadRetType, arg: ?*void) -> (ThreadID, bool) #nocheck {
+	_ := start;
+	_ := arg;
 	return 0, false;
 }
 
 wait_thread :: fn(thread: ThreadID) -> (int, bool) {
+	_ := thread;
 	return 0, false;
 }
 
 kill_thread :: fn(id: ThreadID) {
+	_ := id;
 }
 
 delete_dir :: fn(path: string) -> bool {
+	_ := path;
 	return false;
 }
 
 delete_file :: fn(path: string) -> bool {
+	_ := path;
 	return false;
 }
 
 copy_file :: fn(from_: string, to_: string, overwrite: bool = true) -> bool {
+	_, _, _ := (from_, to_, overwrite);
 	return false;
 }
 
 mkdir :: fn(dir_: string) -> bool {
+	_ := dir_;
 	return false;
 }
 
 list_files :: fn(dir_: string, callback: fn(data: *ListFileData, arg: ?*) -> bool, arg: ?*) -> bool {
+	_, _, _ := (dir_, callback, arg);
 	return false;
 }
 
@@ -131,6 +143,7 @@ make_std_stream :: fn() -> io.Stream {
 
 make_file_stream :: fn(name: string, flags: FileOpenFlags, alloc: *mem.Allocator) -> (io.Stream, bool) {
 
+	_, _ := (flags, alloc);
 	fd := open(name.data, len(name) as u32);
 	if fd == -1
 		return io.Stream {func=os_stream_fn}, false;

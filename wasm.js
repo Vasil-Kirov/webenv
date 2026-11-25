@@ -2,11 +2,8 @@
 let instance = {}
 let module = {}
 
-let uniforms = []
-uniforms.push(null)
-
 let webglObjs = []
-webglObjs.push(0)
+webglObjs.push(null)
 
 let sockets = []
 let sockID = 0
@@ -90,7 +87,7 @@ function findSocket(id) {
 /** @type {HTMLCanvasElement} */
 const canvas = document.getElementById('canvas')
 /** @type {WebGLRenderingContext} */
-const gl = canvas.getContext("webgl2", {
+let gl = canvas.getContext("webgl2", {
 	alpha: true,
 	antialias: true
 });
@@ -100,6 +97,22 @@ if (gl == null) {
 }
 gl.enable(gl.BLEND);
 gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+let uniforms = new Map();
+
+function getUniformLocation(program, name) {
+	if (!uniforms.has(program)) {
+		uniforms.set(program, new Map())
+	}
+	if (!uniforms.get(program).has(name)) {
+		const found = gl.getUniformLocation(program, name);
+		if (found == null)
+			return 0;
+		uniforms.get(program).set(name, webglObj(found))
+	}
+	return uniforms.get(program).get(name);
+}
+
 
 function wasm_log_number(ptr, len, num) {
 	const str_array = new Uint8Array(instance.exports.memory.buffer, ptr, len)
@@ -186,7 +199,7 @@ function webglObj(obj) {
 		console.error("NULL object passed to webglObj()!")
 		return -1
 	}
-	for (let index = 0; index < webglObjs.length; index++) {
+	for (let index = 1; index < webglObjs.length; index++) {
 		if (webglObjs[index] == null) {
 			webglObjs[index] = obj;
 			return index;
@@ -273,12 +286,15 @@ function ensureHiddenInput() {
 	return hiddenInput;
 }
 
-webFS = new FS()
+const webFS = new FS()
 async function init() {
 	if (!gl) {
 		alert("Couldn't get webgl context!");
 		return;
 	}
+
+	/** @type {WebGLRenderingContext} */
+	gl = WebGLDebugUtils.makeDebugContext(gl)
 
 	const importObjects = {
 		imports: {
@@ -288,6 +304,8 @@ async function init() {
 			wasm_abort,
 			assertionFailed,
 			load_img,
+
+			read_ms_f64: () => performance.now(),
 
 			wasm_get_ms: () => performance.now(),
 
@@ -381,18 +399,21 @@ async function init() {
 			glCompileShader: (shader) => gl.compileShader(webglObjs[shader]),
 			glCullFace: (mode) => gl.cullFace(mode),
 			//glDeleteBuffers: (n, buffs) => gl.deleteBuffers(n, buffs),
-			//glDeleteFramebuffers: (n, fbs) => gl.deleteFramebuffers(n, fbs),
+			glDeleteFramebuffer: (fb) => {
+				gl.deleteFramebuffer(fb)
+				webglObjs[fb] = null
+			},
 			glDeleteProgram: (program) => {
-				webglObj[program] = null;
 				gl.deleteProgram(webglObjs[program]);
+				webglObj[program] = null;
 			},
 			glDeleteShader: (shader) => {
-				webglObj[shader] = null;
 				gl.deleteShader(webglObjs[shader]);
+				webglObj[shader] = null;
 			},
 			glDeleteTexture: (tex) => {
-				webglObj[tex] = null;
 				gl.deleteTexture(webglObjs[tex]);
+				webglObj[tex] = null;
 			},
 			glDepthFunc: (fn) => gl.depthFunc(fn),
 			glDepthMask: (flag) => gl.depthMask(flag),
@@ -402,6 +423,7 @@ async function init() {
 			glDisableVertexAttribArray: (idx) => gl.disableVertexAttribArray(idx),
 			glDrawArrays: (mode, first, count) => gl.drawArrays(mode, first, count),
 			glDrawElements: (mode, count, type, indices) => gl.drawElements(mode, count, type, indices),
+			glDrawElementsInstanced: (mode, count, type, offset, instanceCount) => gl.drawElementsInstanced(mode, count, type, offset, instanceCount),
 			glEnable: (cap) => gl.enable(cap),
 			glBlendFunc: (sf, df) => gl.blendFunc(sf, df),
 			glEnableVertexAttribArray: (idx) => gl.enableVertexAttribArray(idx),
@@ -411,26 +433,23 @@ async function init() {
 			glCreateVertexArray: () => webglObj(gl.createVertexArray()),
 			glCreateBuffer: () => webglObj(gl.createBuffer()),
 			glCreateTexture: () => webglObj(gl.createTexture()),
+			glCreateFramebuffer: () => webglObj(gl.createFramebuffer()),
+			glCreateRenderbuffer: () => webglObj(gl.createRenderbuffer()),
 
 			glGetUniformLocation: (program, name) => {
 				const s = utf8ToString(name)
-				const loc = gl.getUniformLocation(webglObjs[program], s)
-				if (loc == null) {
-					return 0
-				}
-				const id = uniforms.length
-				uniforms.push(loc)
-				return id
+				const loc = getUniformLocation(webglObjs[program], s)
+				return loc
 			},
-			glUniform1i: (location, v0) => gl.uniform1i(uniforms[location], v0),
-			glUniform1f: (location, v0) => gl.uniform1f(uniforms[location], v0),
-			glUniform2f: (location, v0, v1) => gl.uniform2f(uniforms[location], v0, v1),
-			glUniform3f: (location, v0, v1, v2) => gl.uniform3f(uniforms[location], v0, v1, v2),
-			glUniform4f: (location, v0, v1, v2, v3) => gl.uniform4f(uniforms[location], v0, v1, v2, v3),
+			glUniform1i: (location, v0) => gl.uniform1i(webglObjs[location], v0),
+			glUniform1f: (location, v0) => gl.uniform1f(webglObjs[location], v0),
+			glUniform2f: (location, v0, v1) => gl.uniform2f(webglObjs[location], v0, v1),
+			glUniform3f: (location, v0, v1, v2) => gl.uniform3f(webglObjs[location], v0, v1, v2),
+			glUniform4f: (location, v0, v1, v2, v3) => gl.uniform4f(webglObjs[location], v0, v1, v2, v3),
 			glUniformMatrix4fv: (location, count, transpose, value) => {
 				const _ = count
 				const arr = toJSF32(value, 16)
-				gl.uniformMatrix4fv(uniforms[location], transpose, arr)
+				gl.uniformMatrix4fv(webglObjs[location], transpose, arr)
 			},
 			glWebClearUniformBuffer: () => {
 				uniforms = []
@@ -445,12 +464,27 @@ async function init() {
 			},
 			//glBindAttribLocation: (p, i, n) => gl.bindAttribLocation(p, i, n),
 			glBindBuffer: (t, b) => gl.bindBuffer(t, webglObjs[b]),
+			glBindFramebuffer: (t, fb) => gl.bindFramebuffer(t, webglObjs[fb]),
+			glBindRenderbuffer: (t, rb) => gl.bindRenderbuffer(t, webglObjs[rb]),
 			glBindVertexArray: (array) => gl.bindVertexArray(webglObjs[array]),
 			glBindTexture: (target, tex) => gl.bindTexture(target, webglObjs[tex]),
+
+			glCheckFramebufferStatus: (t) => gl.checkFramebufferStatus(t),
+			glFramebufferTexture2D: (t, at, text, tex, level) => gl.framebufferTexture2D(t, at, text, webglObjs[tex], level),
+			glFramebufferRenderbuffer: (t, at, rbt, rb) => gl.framebufferRenderbuffer(t, at, rbt, webglObjs[rb]),
+			glRenderbufferStorage: (t, inf, w, h) => gl.renderbufferStorage(t, inf, w, h),
 
 			glBufferData: function (target, size, data, usage) {
 				gl.bufferData(target, toJS(data, size), usage)
 			},
+
+			glGetBufferParameter: (target, param) => gl.getBufferParameter(target, param),
+			glGetBufferSubData: (target, srcOffset, size, ptr) => {
+				const mem = new Uint8Array(instance.exports.memory.buffer)
+				gl.getBufferSubData(target, srcOffset, mem, ptr, size)
+			},
+
+			glGetError: () => gl.getError(),
 
 			glTexImage2D: function (target, level, internalFormat, width, height, border, format, type, pixels) {
 				let multiplier = 4;
@@ -463,8 +497,11 @@ async function init() {
 			glTexParameteri: (target, pname, param) => gl.texParameteri(target, pname, param),
 			glGenerateMipmap: (target) => gl.generateMipmap(target),
 
-			glBufferSubData: (t, o, s, d) => gl.bufferSubData(t, o, s, d),
+			glBufferSubData: (t, o, s, d) => {
+				gl.bufferSubData(t, o, toJS(d, s));
+			},
 			glVertexAttribPointer: (i, s, t, n, st, p) => gl.vertexAttribPointer(i, s, t, n, st, p),
+			glVertexAttribDivisor: (idx, div) => gl.vertexAttribDivisor(idx, div),
 
 			glLinkProgram: (program) => gl.linkProgram(webglObjs[program]),
 			glUseProgram: (program) => gl.useProgram(webglObjs[program]),
@@ -483,6 +520,14 @@ async function init() {
 				webglObjs.push(program);
 				return id;
 			},
+
+			glBindBufferBase: (target, index, buffer) => gl.bindBufferBase(target, index, webglObjs[buffer]),
+			glGetUniformBlockIndex: function (program, blockNameCStr) {
+				const blockName = utf8ToString(blockNameCStr)
+				return gl.getUniformBlockIndex(webglObjs[program], blockName);
+			},
+			glUniformBlockBinding: (program, idx, binding) => gl.uniformBlockBinding(webglObjs[program], idx, binding),
+
 
 			glWebGetProgramLinkStatus: function (program) {
 				const obj = webglObjs[program];
@@ -663,7 +708,7 @@ async function init() {
 	);
 
 	function on_resize() {
-		instance.exports.on_resize(window.innerWidth, window.innerHeight)
+		instance.exports.on_resize(userPtr, window.innerWidth, window.innerHeight)
 	}
 
 	window.addEventListener("resize", (w, h) => on_resize(userPtr, w, h));

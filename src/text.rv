@@ -161,11 +161,11 @@ draw_text :: fn(r: *Renderer, font: *Font, text: string, pospx: ui.iv2, color: v
 
 		pos[1] = MAX_Y - (pos[1] + sz[1]);
 
-		set_shader(r, .Box);
-		set_uniform(r.shader, "Color", color);
-		set_uniform(r.shader, "BoxSize", v2 {m.w, m.h});
-		set_uniform(r.shader, "TopRound", 0.0);
-		set_uniform(r.shader, "BotRound", 0.0);
+		set_shader(r, "Box");
+		rset_uniform(r.shader, "Color", color);
+		rset_uniform(r.shader, "BoxSize", v2 {m.w, m.h});
+		rset_uniform(r.shader, "TopRound", 0.0);
+		rset_uniform(r.shader, "BotRound", 0.0);
 		draw_quad(r, g.texture, pos, sz, .{0, 1}, .{1, 0});
 		pospx[0] += ((m.advance + font.spacing) * dpr) as int;
 	}
