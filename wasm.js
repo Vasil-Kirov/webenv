@@ -11,17 +11,44 @@ let sockID = 0
 const text_atlas = new OffscreenCanvas(1024, 1024);
 const text_ctx = text_atlas.getContext('2d');
 
+class VImage {
+	constructor() {
+		this.bitmap = null
+		this.canvas = null
+		this.ctx = null
+	}
+	async decodePng(rawArray) {
+		const blob = new Blob([rawArray], {type: 'image/png'} )
+		this.bitmap = await createImageBitmap(blob)
+
+		this.canvas = new OffscreenCanvas(this.bitmap.width, this.bitmap.height)
+		this.ctx = this.canvas.getContext('2d');
+		this.ctx.drawImage(this.bitmap, 0, 0)
+	}
+	free() {
+		this.bitmap.close()
+	}
+	upload_texture() {
+		return upload_texture_from_canvas(this.ctx, 0, 0, this.bitmap.width, this.bitmap.height)
+	}
+}
+
 class VFile {
 	constructor(fetchPath, virtualPath) {
 		this.name = virtualPath
 		this.error = null
 		this.data = null
+		this.img  = null
 		this.ready = (async () => {
 			try {
 				const r = await fetch(fetchPath)
 				if (!r.ok) throw new Error(`${r.status} ${fetchPath}`)
 				const buf = await r.arrayBuffer()
 				this.data = new Uint8Array(buf)
+				if (fetchPath.endsWith('.png')) {
+					this.img = new VImage()
+					await this.img.decodePng(this.data)
+				}
 			} catch (e) {
 				this.error = e
 			}
@@ -30,6 +57,12 @@ class VFile {
 
 	hasError() {
 		return this.error != null
+	}
+
+	close() {
+		if (this.img != null) {
+			this.img.free()
+		}
 	}
 }
 
@@ -45,7 +78,7 @@ class FS {
 		this.files.push(vfile)
 	}
 	open(name) {
-		for ([fd, file] of this.files.entries()) {
+		for (const [fd, file] of this.files.entries()) {
 			if (file.name == name) {
 				if (file.hasError())
 					return -1
@@ -67,11 +100,32 @@ class FS {
 		return this.files[fd].data
 	}
 	get_fsize(fd) {
-		if (!verifyFD(fd))
+		if (!this.verifyFD(fd))
 			return 0
 		if (this.files[fd].data == null)
 			return 0
 		return this.files[fd].data.length
+	}
+	upload_texture(fd) {
+		if (!this.verifyFD(fd))
+			return 0
+		if (this.files[fd].img == null)
+			return 0
+		return this.files[fd].img.upload_texture()
+	}
+	get_width(fd) {
+		if (!this.verifyFD(fd))
+			return 0
+		if (this.files[fd].img == null)
+			return 0
+		return this.files[fd].img.bitmap.width
+	}
+	get_height(fd) {
+		if (!this.verifyFD(fd))
+			return 0
+		if (this.files[fd].img == null)
+			return 0
+		return this.files[fd].img.bitmap.height
 	}
 }
 
@@ -328,6 +382,10 @@ async function init() {
 				copyToWASM(buf, ptr, buf.length)
 				return ptr
 			},
+
+			file_img_upload: (fd) => webFS.upload_texture(fd),
+			file_get_width: (fd) => webFS.get_width(fd),
+			file_get_height: (fd) => webFS.get_height(fd),
 
 			load_font: function (fontNameCStr) {
 				const fontName = utf8ToString(fontNameCStr)
@@ -634,12 +692,6 @@ async function init() {
 	module = result.module;
 
 
-	const userPtr = instance.exports.entry(canvas.clientWidth, canvas.clientHeight);
-	if (userPtr == 0) {
-		alert("Failed to initialize program!");
-		return;
-	}
-
 	const toWait = []
 	const loadCount = instance.exports.get_loadable_files_count()
 	for (let i = 0; i < loadCount; ++i) {
@@ -652,6 +704,12 @@ async function init() {
 
 	await Promise.all(toWait)
 	
+
+	const userPtr = instance.exports.entry(canvas.clientWidth, canvas.clientHeight);
+	if (userPtr == 0) {
+		alert("Failed to initialize program!");
+		return;
+	}
 
 	document.addEventListener('keydown', e => instance.exports.on_key_down(e.keyCode))
 	document.addEventListener('keyup', e => instance.exports.on_key_up(e.keyCode))

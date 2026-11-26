@@ -4,7 +4,8 @@ precision mediump float;
 layout (location = 0) in vec3 iPosition;
 layout (location = 1) in vec3 iNormal;
 layout (location = 2) in vec2 iTexCoord;
-layout (location = 3) in mat4 iModel;
+layout (location = 3) in vec4 iTexBox;
+layout (location = 4) in mat4 iModel;
 
 out vec2 oTexCoord;
 out vec3 oWorldPos;

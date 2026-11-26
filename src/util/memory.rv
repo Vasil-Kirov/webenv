@@ -86,8 +86,8 @@ FreeStack :: struct {
 AllocHeader :: struct {
 	magic: u32,
 	class: u32,
-	reserved0: u32,
-	reserved1: u32,
+	large_alloc_next: u32, // only for large_alloc
+	large_alloc_size: u32,
 }
 
 AllocFooter :: struct {
@@ -136,15 +136,35 @@ init_heap :: fn() {
 	mheap_start = align_pow2(heap_base+used_heap, 16);
 	mheap_at = mheap_start;
 	used_heap = (mheap_start-heap_base) + HEAP_SIZE;
+	top_large_alloc.first = 0;
+	top_large_alloc.count = 0;
+}
+
+large_malloc :: fn(size: u32) -> *void {
+	alloc_size := align_pow2(size + cast(uint, size_of AllocHeader) + cast(uint, size_of AllocFooter), 16);
+	block := get_large_alloc_block_for_size(alloc_size);
+	write_size := false;
+	if block == -1 {
+		block = assert_heap_allocation_size(alloc_size, size);
+		write_size = true;
+	} 
+	header := cast(*AllocHeader, block);
+	header.magic = ALLOC_MAGIC;
+	header.class = cast(u32, -1);
+	if write_size
+		header.large_alloc_size = size;
+	footer := get_alloc_footer(header);
+	footer.magic = ALLOC_MAGIC;
+
+	p := cast(*void, header+1);
+	memset(p, 0, cast(int, size));
+	return p;
 }
 
 malloc :: fn(size: u32) -> *void #foreign #tag="wexport" {
 	class := class_for_size(size);
 	if class < 0 {
-		alloc := abort_allocator();
-		w := os.make_std_stream();
-		io.writef_alloc(&w, &alloc, "Invalid malloc, size too big %.", size);
-		abort();
+		return large_malloc(size);
 	}
 
 	class_size := CLASS_SIZES[class];
@@ -157,15 +177,7 @@ malloc :: fn(size: u32) -> *void #foreign #tag="wexport" {
 		from_free_list = true;
 		block = get_free_block(bin);
 	} else {
-		block = mheap_at;
-		new_at := mheap_at + alloc_size;
-		if new_at > mheap_start+HEAP_SIZE || new_at < mheap_at {
-			alloc := abort_allocator();
-			w := os.make_std_stream();
-			io.writef_alloc(&w, &alloc, "Heap overflow with allocation of size %.", size); 
-			abort();
-		}
-		mheap_at = new_at;
+		block = assert_heap_allocation_size(alloc_size, size);
 	}
 
 	if block < mheap_start || block >= mheap_at {
@@ -212,9 +224,10 @@ free :: fn(p: ?*void) #foreign #tag="wexport" {
 		io.writef_alloc(&w, &alloc, "Invalid free, magic is %.", header.magic);
 		abort();
 	}
-	if header.class >= NUM_CLASSES as uint {
+
+	if header.class >= NUM_CLASSES as uint && header.class != -1 {
 		alloc := abort_allocator();
-		io.writef_alloc(&w, &alloc, "Invalid header of size %, memory corruption.", header.class);
+		io.writef_alloc(&w, &alloc, "Invalid header class %, memory corruption.", header.class);
 		abort();
 	}
 	footer := get_alloc_footer(header);
@@ -231,11 +244,17 @@ free :: fn(p: ?*void) #foreign #tag="wexport" {
 	header.magic = 0; // poison
 	footer.magic = 0; // poison
 
-	bin := &free_bins[header.class];
-	bin.count++;
-	location := cast(*uint, header);
-	*location = bin.first;
-	bin.first = cast(uint, location);
+	if header.class == -1 {
+		header.large_alloc_next = top_large_alloc.first;
+		top_large_alloc.first = header as uint;
+		top_large_alloc.count++;
+	} else {
+		bin := &free_bins[header.class];
+		bin.count++;
+		location := cast(*uint, header);
+		*location = bin.first;
+		bin.first = cast(uint, location);
+	}
 }
 
 memcopy :: fn (dst: *, src: *,   size: int) -> * #foreign #link="memcpy";
@@ -244,8 +263,12 @@ memset  :: fn (dst: *, val: i32, size: int) -> * #foreign #link="memset";
 #private
 
 free_bins: [NUM_CLASSES]FreeStack = .{};
+top_large_alloc: FreeStack = .{};
 
 get_alloc_footer :: fn(header: *AllocHeader) -> *AllocFooter {
+	if header.class == -1 {
+		return cast(*AllocFooter, cast(uint, header + 1) + header.large_alloc_size);
+	}
 	class_size := CLASS_SIZES[header.class];
 	return cast(*AllocFooter, cast(uint, header + 1) + class_size);
 }
@@ -268,5 +291,43 @@ get_free_block :: fn(bin: *FreeStack) -> uint {
 		bin.first = 0;
 	}
 	return block;
+}
+
+get_large_alloc_block_for_size :: fn(size: uint) -> uint {
+	count := top_large_alloc.count;
+	block := top_large_alloc.first;
+	prev: uint = -1;
+	for count {
+		header := cast(*AllocHeader, block);
+		actual_size := align_pow2(header.large_alloc_size + cast(uint, size_of AllocHeader) + cast(uint, size_of AllocFooter), 16);
+		if actual_size >= size {
+			top_large_alloc.count--;
+			if prev == -1 {
+				top_large_alloc.first = header.large_alloc_next;
+			} else {
+				prev_header := cast(*AllocHeader, prev);
+				prev_header.large_alloc_next = header.large_alloc_next;
+			}
+			header.large_alloc_next = 0;
+			return block;
+		}
+		prev = block;
+		block = header.large_alloc_next;
+		count--;
+	}
+	return -1;
+}
+
+assert_heap_allocation_size :: fn(alloc_size: uint, report_size: uint) -> uint {
+	res := mheap_at;
+	new_at := mheap_at + alloc_size;
+	if new_at > mheap_start+HEAP_SIZE || new_at < mheap_at {
+		alloc := abort_allocator();
+		w := os.make_std_stream();
+		io.writef_alloc(&w, &alloc, "Heap overflow with allocation of size %.", report_size); 
+		abort();
+	}
+	mheap_at = new_at;
+	return res;
 }
 

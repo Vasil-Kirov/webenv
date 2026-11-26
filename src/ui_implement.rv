@@ -12,7 +12,7 @@ Font :: r.Font;
 MAX_X :: 10.0;
 MAX_Y :: 5.625;
 
-copy_to_clipboard :: fn(s: string) {
+copy_to_clipboard :: fn(_s: string) {
 }
 
 get_clipboard :: fn() -> string {

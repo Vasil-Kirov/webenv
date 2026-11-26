@@ -378,7 +378,7 @@ start_frame :: fn(r: *Renderer, v: v4) {
 }
 
 @profile=perf.measure_fn
-upload_instanced_data :: fn(r: *Renderer, models: []M4) {
+upload_instanced_data :: fn(r: *Renderer, models: []InstanceData) {
 	data := make_u8(models);
 	glBindBuffer(GL_ARRAY_BUFFER, r.instance_buffer);
 	glBufferData(GL_ARRAY_BUFFER, len(data), data.data, GL_DYNAMIC_DRAW);
@@ -388,18 +388,9 @@ set_framebuffer :: fn(_: *Renderer, fb: Framebuffer) {
 	glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
 }
 
-bind_material :: fn(r: *Renderer, material: Material, is_fullscreen := false) {
-	set_shader_id(r, material.shader);
-	glBindVertexArray(r.vao);
-	glActiveTexture(GL_TEXTURE0);
-	bind_tex(r, 0);
-	if !is_fullscreen {
-		glBindTexture(GL_TEXTURE_2D, material.tex);
-		bind_uniform_buffer(material.material_ubo);
-	}
-
-	for uniform in material.uniforms {
-		r, ok := resolve_uniform(r.shader, uniform.name);
+set_uniforms :: fn(r: *Renderer, uniforms: []UniformParam, err := true) {
+	for uniform in uniforms {
+		r, ok := resolve_uniform(r.shader, uniform.name, err);
 		if !ok
 			continue;
 
@@ -424,6 +415,19 @@ bind_material :: fn(r: *Renderer, material: Material, is_fullscreen := false) {
 			}
 		};
 	}
+}
+
+bind_material :: fn(r: *Renderer, material: Material, is_fullscreen := false) {
+	set_shader_id(r, material.shader);
+	glBindVertexArray(r.vao);
+	glActiveTexture(GL_TEXTURE0);
+	bind_tex(r, 0);
+	if !is_fullscreen {
+		glBindTexture(GL_TEXTURE_2D, material.tex);
+		bind_uniform_buffer(material.material_ubo);
+	}
+
+	set_uniforms(r, material.uniforms, true);
 }
 
 @profile=perf.measure_fn
@@ -457,15 +461,21 @@ bind_batch :: fn(r: *Renderer, b: Batch) {
 
 	glBindBuffer(GL_ARRAY_BUFFER, r.instance_buffer);
 
-	// iModel
+	stride := cast(i32, size_of(M4) + size_of(v4));
+	
+	// iTexBox
 	glEnableVertexAttribArray(3);
-	glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE as u8, size_of(M4) as i32, null);
+	glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE as u8, stride, null);
+
+	// iModel
 	glEnableVertexAttribArray(4);
-	glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE as u8, size_of(M4) as i32, cast(*void, size_of(v4)));
+	glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE as u8, stride, cast(*void, size_of(v4)*2));
 	glEnableVertexAttribArray(5);
-	glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE as u8, size_of(M4) as i32, cast(*void, size_of(v4)*2));
+	glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE as u8, stride, cast(*void, size_of(v4)*3));
 	glEnableVertexAttribArray(6);
-	glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE as u8, size_of(M4) as i32, cast(*void, size_of(v4)*3));
+	glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE as u8, stride, cast(*void, size_of(v4)*4));
+	glEnableVertexAttribArray(7);
+	glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE as u8, stride, cast(*void, size_of(v4)*5));
 
 	//glVertexAttribDivisor(0, 0); so far nothing sets them to 1, so no need
 	//glVertexAttribDivisor(1, 0);
@@ -474,6 +484,7 @@ bind_batch :: fn(r: *Renderer, b: Batch) {
 	glVertexAttribDivisor(4, 1);
 	glVertexAttribDivisor(5, 1);
 	glVertexAttribDivisor(6, 1);
+	glVertexAttribDivisor(7, 1);
 
 	glBindBuffer(GL_ARRAY_BUFFER, b.mesh.verts);
 }
@@ -571,45 +582,45 @@ connect_shader_uniform_buffer :: fn(r: *Renderer, shader: int, ub: Uniformbuffer
 	glUniformBlockBinding(shader.obj, loc, ub.bind_point);
 }
 
-generate_cube :: fn(r: *Renderer) -> Mesh {
+generate_cube :: fn(r: *Renderer, t00 := v2{0.0, 0.0}, t01 := v2{0.0, 1.0}, t10 := v2{1.0, 0.0}, t11 := v2{1.0, 1.0}) -> Mesh {
 	h := 0.5;
 
 	verts := [24]Vert{
 		// Front (+Z)
-		.{.{-h, -h,  h}, .{0, 0, 1}, .{0, 0}},
-		.{.{ h, -h,  h}, .{0, 0, 1}, .{1, 0}},
-		.{.{ h,  h,  h}, .{0, 0, 1}, .{1, 1}},
-		.{.{-h,  h,  h}, .{0, 0, 1}, .{0, 1}},
+		.{.{-h, -h,  h}, .{0, 0, 1}, t00},
+		.{.{ h, -h,  h}, .{0, 0, 1}, t10},
+		.{.{ h,  h,  h}, .{0, 0, 1}, t11},
+		.{.{-h,  h,  h}, .{0, 0, 1}, t01},
 
 		// Back (-Z)
-		.{.{ h, -h, -h}, .{0, 0, -1}, .{0, 0}},
-		.{.{-h, -h, -h}, .{0, 0, -1}, .{1, 0}},
-		.{.{-h,  h, -h}, .{0, 0, -1}, .{1, 1}},
-		.{.{ h,  h, -h}, .{0, 0, -1}, .{0, 1}},
+		.{.{ h, -h, -h}, .{0, 0, -1}, t00},
+		.{.{-h, -h, -h}, .{0, 0, -1}, t10},
+		.{.{-h,  h, -h}, .{0, 0, -1}, t11},
+		.{.{ h,  h, -h}, .{0, 0, -1}, t01},
 
 		// Right (+X)
-		.{.{ h, -h,  h}, .{1, 0, 0}, .{0, 0}},
-		.{.{ h, -h, -h}, .{1, 0, 0}, .{1, 0}},
-		.{.{ h,  h, -h}, .{1, 0, 0}, .{1, 1}},
-		.{.{ h,  h,  h}, .{1, 0, 0}, .{0, 1}},
+		.{.{ h, -h,  h}, .{1, 0, 0}, t00},
+		.{.{ h, -h, -h}, .{1, 0, 0}, t10},
+		.{.{ h,  h, -h}, .{1, 0, 0}, t11},
+		.{.{ h,  h,  h}, .{1, 0, 0}, t01},
 
 		// Left (-X)
-		.{.{-h, -h, -h}, .{-1, 0, 0}, .{0, 0}},
-		.{.{-h, -h,  h}, .{-1, 0, 0}, .{1, 0}},
-		.{.{-h,  h,  h}, .{-1, 0, 0}, .{1, 1}},
-		.{.{-h,  h, -h}, .{-1, 0, 0}, .{0, 1}},
+		.{.{-h, -h, -h}, .{-1, 0, 0}, t00},
+		.{.{-h, -h,  h}, .{-1, 0, 0}, t10},
+		.{.{-h,  h,  h}, .{-1, 0, 0}, t11},
+		.{.{-h,  h, -h}, .{-1, 0, 0}, t01},
 
 		// Top (+Y)
-		.{.{-h, h,  h},  .{0, 1, 0},  .{0, 0}},
-		.{.{ h, h,  h},  .{0, 1, 0},  .{1, 0}},
-		.{.{ h, h, -h},  .{0, 1, 0},  .{1, 1}},
-		.{.{-h, h, -h},  .{0, 1, 0},  .{0, 1}},
+		.{.{-h, h,  h},  .{0, 1, 0},  t00},
+		.{.{ h, h,  h},  .{0, 1, 0},  t10},
+		.{.{ h, h, -h},  .{0, 1, 0},  t11},
+		.{.{-h, h, -h},  .{0, 1, 0},  t01},
 
 		// Bottom (-Y)
-		.{.{-h, -h, -h}, .{0, -1, 0}, .{0, 0}},
-		.{.{ h, -h, -h}, .{0, -1, 0}, .{1, 0}},
-		.{.{ h, -h,  h}, .{0, -1, 0}, .{1, 1}},
-		.{.{-h, -h,  h}, .{0, -1, 0}, .{0, 1}},
+		.{.{-h, -h, -h}, .{0, -1, 0}, t00},
+		.{.{ h, -h, -h}, .{0, -1, 0}, t10},
+		.{.{ h, -h,  h}, .{0, -1, 0}, t11},
+		.{.{-h, -h,  h}, .{0, -1, 0}, t01},
 	};
 
 	for &v in verts {
@@ -638,10 +649,11 @@ ResolvedUniform :: struct {
 	location: GLint,
 }
 
-resolve_uniform :: fn(shader: u32, name: string) -> (ResolvedUniform, bool) {
+resolve_uniform :: fn(shader: u32, name: string, err := true) -> (ResolvedUniform, bool) {
 	location := glGetUniformLocation(shader, name.data as *i8);
 	if location == 0 {
-		println("Failed to find uniform %", name);
+		if err
+			println("Failed to find uniform %", name);
 		return .{}, false;
 	}
 	

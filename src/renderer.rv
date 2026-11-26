@@ -8,6 +8,11 @@ _ :: #import util;
 _ :: #import math;
 _ :: #import "collections.rv";
 
+InstanceData :: struct {
+	tex_box: v4,
+	model: M4,
+}
+
 MaterialsUBO :: struct #pack {
 	diffuse: v3, pad: f32,
 	specular: v3, shininess: f32,
@@ -65,11 +70,12 @@ Material :: struct {
 DrawItem :: struct {
 	material: Material,
 	mesh: Mesh,
-	model: M4,
-	flags: u32,
+	instance_data: InstanceData,
+	data: ?*void,
 }
 
 Pass :: struct {
+	sort_cmp: *fn(a: DrawItem, b: DrawItem) -> bool,
 	filter: ?*fn(item: DrawItem) -> bool,
 	framebuffer: Framebuffer,
 	clear: bool,
@@ -102,11 +108,12 @@ DirLight :: struct {
 Scene :: struct {
 	camera: *Camera,
 	items: []DrawItem,
+	global_uniforms: []UniformParam,
 }
 
 Batch :: struct {
 	items: []DrawItem,
-	models: []M4,
+	instance_data: []InstanceData,
 	material: Material,
 	mesh: Mesh,
 }
@@ -125,18 +132,18 @@ make_material :: fn(r: *Renderer, shader: int, uniforms: []UniformParam, matubo:
 
 
 @profile=perf.measure_fn
-batch_group_items :: fn(items: *[]DrawItem) -> []Batch {
+batch_group_items :: fn(items: *[]DrawItem, sort_cmp: *fn(a: DrawItem, b: DrawItem) -> bool) -> []Batch {
 	batches := array.create(Batch, mem.get_temp());
 	for len(*items) != 0 {
 		first := (*items)[0];
 
 		batch: Batch;
 		batch.items = array.create(DrawItem, mem.get_temp());
-		batch.models = array.create(M4, mem.get_temp());
+		batch.instance_data = array.create(InstanceData, mem.get_temp());
 		batch.material = first.material;
 		batch.mesh = first.mesh;
 
-		array.add(&batch.models, first.model);
+		array.add(&batch.instance_data, first.instance_data);
 		array.pop(items, 0);
 		array.add(&batch.items, first);
 		for i := 0; i < len(*items); ++i {
@@ -144,9 +151,10 @@ batch_group_items :: fn(items: *[]DrawItem) -> []Batch {
 			if item.material.id == batch.material.id && item.mesh.id == batch.mesh.id {
 				array.pop(items, i);
 				array.add(&batch.items, item);
-				array.add(&batch.models, item.model);
+				array.add(&batch.instance_data, item.instance_data);
 			}
 		}
+		sort(batch.items, sort_cmp);
 		array.add(&batches, batch);
 	}
 	return batches;
@@ -178,16 +186,20 @@ draw_scene :: fn(r: *Renderer, passes: []Pass, scene: Scene, lights_ubo: Uniform
 			continue;
 
 		set_depth_test(true);
-		batches := batch_group_items(&items);
+		batches := batch_group_items(&items, pass.sort_cmp);
 		for batch in batches {
-			upload_instanced_data(r, batch.models);
+			upload_instanced_data(r, batch.instance_data);
 			bind_batch(r, batch);
 			pos := resolve_uniform(r.shader, "ViewPos") or { return; };
 			set_uniform(pos, scene.camera.position);
+			set_uniforms(r, scene.global_uniforms, false);
 
 			draw_instanced(r, batch.mesh.idx_count, len(batch.items));
 		}
 	}
 }
-_ :: #import misc;
+
+file_img_upload :: fn(fd: i32) -> GPUTexture #wasm_import="imports","file_img_upload";
+file_get_width :: fn(fd: i32) -> u32 #wasm_import="imports","file_get_width";
+file_get_height :: fn(fd: i32) -> u32 #wasm_import="imports","file_get_height";
 

@@ -3,6 +3,9 @@ module util;
 _ :: #import misc;
 _ :: #import wasm;
 _ :: #import util;
+#import os;
+#import renderer;
+#import array;
 
 AssetType :: enum: u8 {
 	None,
@@ -32,17 +35,20 @@ Asset :: union {
 	img: ImageAsset,
 }
 
+AssetID :: int;
+
 AssetManager :: struct {
-	assets: [512]Asset,
+	assets: []Asset,
 }
 
 create_asset_manager :: fn() -> AssetManager {
 	return .{
+		assets = array.create(Asset, &heap),
 	};
 }
 
 get_asset :: fn(manager: *AssetManager, id: AssetID) -> (*Asset, bool) {
-	a := &manager.assets[id as uint];
+	a := &manager.assets[id];
 	ok := a.base.state == .Loaded;
 	return a, ok;
 }
@@ -65,25 +71,25 @@ get_assets :: fn(manager: *AssetManager, ids: []AssetID) -> Optional<[]*Asset> {
 	return wrap(assets);
 }
 
-are_assets_done :: fn(manager: *AssetManager) -> bool {
-	for i in cast(uint, AssetID.COUNT) {
-		if manager.assets[i].base.state == .StartedLoading
-			return false;
-	}
-	return true;
-}
-
-load_img :: fn(manager: *AssetManager, name: string, id: AssetID) -> bool {
-	if manager.assets[id as uint].base.state != .NotLoaded return false;
-
-	img := &manager.assets[id as uint].img;
+load_img :: fn(manager: *AssetManager, name: string) -> (AssetID, bool) {
+	//img := &manager.assets[id as uint].img;
+	img: ImageAsset;
 	img.t = .Image;
-	img.state = .StartedLoading;
-	wload_img(name.data, img);
-	return true;
+	fd := os.open(name.data, len(name) as u32);
+	if fd == -1
+		return 0, false;
+
+	img.texture = renderer.file_img_upload(fd);
+	img.width   = renderer.file_get_width(fd);
+	img.height  = renderer.file_get_height(fd);
+	img.state   = .Loaded;
+
+	id := len(manager.assets);
+	array.add(&manager.assets, Asset { img = img });
+	return id, true;
 }
 
-load_img_on_success :: fn(fname: *u8, img: *ImageAsset, texture: u32, width: u32, height: u32) #foreign #tag="wexport" {
+load_img_on_success :: fn(_fname: *u8, img: *ImageAsset, texture: u32, width: u32, height: u32) #foreign #tag="wexport" {
 	img.texture = texture;
 	img.width   = width;
 	img.height  = height;
@@ -95,101 +101,4 @@ load_img_on_error :: fn(fname: *u8, img: *ImageAsset) #foreign #tag="wexport" {
 	img.state = .FailedToLoad;
 	print("Failed: %s", fname);
 }
-
-AssetID :: enum: uint {
-	None, 
-
-	ALTER_THE_FUTURE_3, 
-	ALTER_THE_FUTURE_3_NOW,
-	ALTER_THE_FUTURE_5, 
-	ARMAGEDDON,
-	ATTACK_2,
-	ATTACK_OF_THE_DEAD, 
-	BARKING_KITTEN, 
-	BURY, 
-
-	BEARD_CAT, 
-	BIKINI_CAT, 
-	CATS_SCHRODINGER, 
-	CAT_HENGE, 
-	CAT_O_LANTERN, 
-	CATTERMELON, 
-	DE_CAT_IPATED, 
-	ELECTROCAT, 
-	FOOTBALL_CAT, 
-	HAIRY_POTATO_CAT, 
-	HORSE_CAT, 
-	KIT_TEA_CAT, 
-	KNIGHT_CAT, 
-	LOCH_NESS_KITTY, 
-	MERCAT, 
-	MOMMA_CAT, 
-	RAINBOW_RALPHING_CAT,
-	SHY_BLADDER_CAT, 
-	TACO_CAT, 
-	TELEPHONE_BOX_CAT, 
-	TROLL_CAT, 
-	VAMPIRE_CAT, 
-	ZOMBIE_CAT, 
-
-	CATOMIC_BOMB, 
-	CLAIRVOYANCE_NOW, 
-	CLONE, 
-	CURSE_OF_THE_CAT_BUTT, 
-	DEFUSE, 
-	DEVIL_CAT, 
-	DIG_DEEPER, 
-	DRAW_FROM_THE_BOTTOM, 
-	EXPLODING_KITTEN, // IMPORTANT
-	FAVOR, 
-	FEED_THE_DEAD, 
-	FERAL_CAT, // MUST BE CHECKED SPECIALLY
-	GARBAGE_COLLECTION, 
-	GOD_CAT, 
-	GRAVE_ROBBER, 
-	ILL_TAKE_THAT, 
-	IMPLODING_KITTEN, // IMPORTANT
-	MARK, 
-	NOPE, 
-	PERSONAL_ATTACK_3, 
-	POTLUCK, 
-	RAISING_HECK, 
-	REVEAL_THE_FUTURE_3, 
-	REVERSE, 
-	SEE_THE_FUTER_3, 
-	SEE_THE_FUTURE_5, 
-	SHARE_THE_FUTURE_3, 
-	SHUFFLE, 
-	SHUFFLE_NOW, 
-	SKIP, 
-	STREAKING_KITTEN, // FAV CARD
-	SUPER_SKIP, 
-	SWAP_TOP_AND_BOTTOM, 
-	TARGETED_ATTACK, 
-	TOWER_OF_POWER, 
-	ZOMBIE_KITTEN, 
-
-	CARDBACK1,
-	CARDBACK2,
-
-	BOARD_CIRCLE1,
-	BOARD_CIRCLE2,
-	BOARD_CIRCLE3,
-
-	TURN_ARROWS,
-	CENTER,
-	GROUND,
-
-	ICON_BEAR,
-	ICON_CATHULU,
-	ICON_DINO,
-	ICON_KITTEN,
-	ICON_NINJA,
-	ICON_PLATYPUS,
-	ICON_SUSHI,
-	ICON_UNDERWEARCAT,
-	ICON_EXPLODED,
-
-	COUNT,
-};
 
